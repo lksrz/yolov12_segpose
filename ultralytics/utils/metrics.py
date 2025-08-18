@@ -1167,6 +1167,126 @@ class PoseMetrics(SegmentMetrics):
         return self.box.curves_results + self.pose.curves_results
 
 
+class SegmentPoseMetrics(SimpleClass):
+    """Aggregate metrics for box, mask, and pose simultaneously."""
+
+    def __init__(self, save_dir=Path("."), plot=False, on_plot=None, names=()) -> None:
+        self.save_dir = save_dir
+        self.plot = plot
+        self.on_plot = on_plot
+        self.names = names
+        self.box = Metric()
+        self.seg = Metric()
+        self.pose = Metric()
+        self.speed = {"preprocess": 0.0, "inference": 0.0, "loss": 0.0, "postprocess": 0.0}
+        self.task = "segment_pose"
+
+    def process(self, tp, tp_m, tp_p, conf, pred_cls, target_cls):
+        results_mask = ap_per_class(
+            tp_m,
+            conf,
+            pred_cls,
+            target_cls,
+            plot=self.plot,
+            on_plot=self.on_plot,
+            save_dir=self.save_dir,
+            names=self.names,
+            prefix="Mask",
+        )[2:]
+        self.seg.nc = len(self.names)
+        self.seg.update(results_mask)
+
+        results_pose = ap_per_class(
+            tp_p,
+            conf,
+            pred_cls,
+            target_cls,
+            plot=self.plot,
+            on_plot=self.on_plot,
+            save_dir=self.save_dir,
+            names=self.names,
+            prefix="Pose",
+        )[2:]
+        self.pose.nc = len(self.names)
+        self.pose.update(results_pose)
+
+        results_box = ap_per_class(
+            tp,
+            conf,
+            pred_cls,
+            target_cls,
+            plot=self.plot,
+            on_plot=self.on_plot,
+            save_dir=self.save_dir,
+            names=self.names,
+            prefix="Box",
+        )[2:]
+        self.box.nc = len(self.names)
+        self.box.update(results_box)
+
+    @property
+    def keys(self):
+        return [
+            "metrics/precision(B)",
+            "metrics/recall(B)",
+            "metrics/mAP50(B)",
+            "metrics/mAP50-95(B)",
+            "metrics/precision(M)",
+            "metrics/recall(M)",
+            "metrics/mAP50(M)",
+            "metrics/mAP50-95(M)",
+            "metrics/precision(P)",
+            "metrics/recall(P)",
+            "metrics/mAP50(P)",
+            "metrics/mAP50-95(P)",
+        ]
+
+    def mean_results(self):
+        return self.box.mean_results() + self.seg.mean_results() + self.pose.mean_results()
+
+    def class_result(self, i):
+        return self.box.class_result(i) + self.seg.class_result(i) + self.pose.class_result(i)
+
+    @property
+    def maps(self):
+        return self.box.maps + self.seg.maps + self.pose.maps
+
+    @property
+    def fitness(self):
+        return (self.box.fitness() + self.seg.fitness() + self.pose.fitness()) / 3
+
+    @property
+    def curves(self):
+        return [
+            "Precision-Recall(B)",
+            "F1-Confidence(B)",
+            "Precision-Confidence(B)",
+            "Recall-Confidence(B)",
+            "Precision-Recall(M)",
+            "F1-Confidence(M)",
+            "Precision-Confidence(M)",
+            "Recall-Confidence(M)",
+            "Precision-Recall(P)",
+            "F1-Confidence(P)",
+            "Precision-Confidence(P)",
+            "Recall-Confidence(P)",
+        ]
+
+    @property
+    def curves_results(self):
+        return self.box.curves_results + self.seg.curves_results + self.pose.curves_results
+
+    @property
+    def results_dict(self):
+        """Returns dictionary of computed performance metrics and statistics for segment+pose."""
+        return dict(zip(self.keys + ["fitness"], self.mean_results() + [self.fitness]))
+
+    @property
+    def ap_class_index(self):
+        """Use box AP class index for per-class printing."""
+        return self.box.ap_class_index
+
+
 class ClassifyMetrics(SimpleClass):
     """
     Class for computing classification metrics including top-1 and top-5 accuracy.

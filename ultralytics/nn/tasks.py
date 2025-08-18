@@ -61,6 +61,7 @@ from ultralytics.nn.modules import (
     RTDETRDecoder,
     SCDown,
     Segment,
+    SegmentPose,
     TorchVision,
     WorldDetect,
     v10Detect,
@@ -75,6 +76,7 @@ from ultralytics.utils.loss import (
     v8OBBLoss,
     v8PoseLoss,
     v8SegmentationLoss,
+    SegPoseLoss,
 )
 from ultralytics.utils.ops import make_divisible
 from ultralytics.utils.plotting import feature_visualization
@@ -256,7 +258,7 @@ class BaseModel(nn.Module):
         """
         self = super()._apply(fn)
         m = self.model[-1]  # Detect()
-        if isinstance(m, Detect):  # includes all Detect subclasses like Segment, Pose, OBB, WorldDetect
+        if isinstance(m, Detect):  # includes all Detect subclasses like Segment, Pose, SegmentPose, OBB, WorldDetect
             m.stride = fn(m.stride)
             m.anchors = fn(m.anchors)
             m.strides = fn(m.strides)
@@ -330,7 +332,7 @@ class DetectionModel(BaseModel):
                 """Performs a forward pass through the model, handling different Detect subclass types accordingly."""
                 if self.end2end:
                     return self.forward(x)["one2many"]
-                return self.forward(x)[0] if isinstance(m, (Segment, Pose, OBB)) else self.forward(x)
+                return self.forward(x)[0] if isinstance(m, (Segment, Pose, SegmentPose, OBB)) else self.forward(x)
 
             m.stride = torch.tensor([s / x.shape[-2] for x in _forward(torch.zeros(1, ch, s, s))])  # forward
             self.stride = m.stride
@@ -427,6 +429,21 @@ class PoseModel(DetectionModel):
     def init_criterion(self):
         """Initialize the loss criterion for the PoseModel."""
         return v8PoseLoss(self)
+
+
+class SegmentPoseModel(DetectionModel):
+    """YOLOv12 segment+pose combined model."""
+
+    def __init__(self, cfg="yolov12-segpose.yaml", ch=3, nc=None, data_kpt_shape=(None, None), verbose=True):
+        if not isinstance(cfg, dict):
+            cfg = yaml_model_load(cfg)
+        if any(data_kpt_shape) and list(data_kpt_shape) != list(cfg.get("kpt_shape", data_kpt_shape)):
+            LOGGER.info(f"Overriding model.yaml kpt_shape={cfg.get('kpt_shape')} with kpt_shape={data_kpt_shape}")
+            cfg["kpt_shape"] = data_kpt_shape
+        super().__init__(cfg=cfg, ch=ch, nc=nc, verbose=verbose)
+
+    def init_criterion(self):
+        return SegPoseLoss(self)
 
 
 class ClassificationModel(BaseModel):
@@ -1050,11 +1067,11 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             args = [ch[f]]
         elif m is Concat:
             c2 = sum(ch[x] for x in f)
-        elif m in {Detect, WorldDetect, Segment, Pose, OBB, ImagePoolingAttn, v10Detect}:
+        elif m in {Detect, WorldDetect, Segment, SegmentPose, Pose, OBB, ImagePoolingAttn, v10Detect}:
             args.append([ch[x] for x in f])
-            if m is Segment:
+            if m in {Segment, SegmentPose}:
                 args[2] = make_divisible(min(args[2], max_channels) * width, 8)
-            if m in {Detect, Segment, Pose, OBB}:
+            if m in {Detect, Segment, SegmentPose, Pose, OBB}:
                 m.legacy = legacy
         elif m is RTDETRDecoder:  # special case, channels arg must be passed in index 1
             args.insert(1, [ch[x] for x in f])
@@ -1138,6 +1155,8 @@ def guess_model_task(model):
             return "detect"
         if m == "segment":
             return "segment"
+        if m in {"segmentpose", "segment_pose"}:
+            return "segment_pose"
         if m == "pose":
             return "pose"
         if m == "obb":
@@ -1158,6 +1177,8 @@ def guess_model_task(model):
         for m in model.modules():
             if isinstance(m, Segment):
                 return "segment"
+            elif isinstance(m, SegmentPose):
+                return "segment_pose"
             elif isinstance(m, Classify):
                 return "classify"
             elif isinstance(m, Pose):

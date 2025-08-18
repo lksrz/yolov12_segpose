@@ -1,0 +1,18 @@
+# COCO person seg+pose combined dataset
+# Example: yolo train model=ultralytics/cfg/models/v12/yolov12-segpose.yaml data=ultralytics/cfg/datasets/coco-segment_pose.yaml
+
+path: ../datasets/coco-segment-pose  # root
+train: images/train2017
+val: images/val2017
+
+nc: 1
+names:
+  0: person
+
+# Keypoints
+kpt_shape: [17, 3]
+
+# Expected label line format per instance:
+# class cx cy w h  (17*3 keypoints)  (segmentation polygon x1 y1 x2 y2 ...)
+
+

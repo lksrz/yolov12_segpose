@@ -565,7 +565,6 @@ class v8PoseLoss(v8DetectionLoss):
             (batch_size, max_kpts, keypoints.shape[1], keypoints.shape[2]), device=keypoints.device
         )
 
-        # TODO: any idea how to vectorize this?
         # Fill batched_keypoints with keypoints based on batch_idx
         for i in range(batch_size):
             keypoints_i = keypoints[batch_idx == i]
@@ -596,6 +595,123 @@ class v8PoseLoss(v8DetectionLoss):
                 kpts_obj_loss = self.bce_pose(pred_kpt[..., 2], kpt_mask.float())  # keypoint obj loss
 
         return kpts_loss, kpts_obj_loss
+
+
+class SegPoseLoss(v8DetectionLoss):
+    """Criterion for combined segmentation + pose task."""
+
+    def __init__(self, model):
+        super().__init__(model)
+        self.overlap = model.args.overlap_mask
+        self.kpt_shape = getattr(model.model[-1], "kpt_shape", (17, 3))
+        self.bce_pose = nn.BCEWithLogitsLoss()
+        is_pose = list(self.kpt_shape) == [17, 3]
+        nkpt = self.kpt_shape[0]
+        sigmas = torch.from_numpy(OKS_SIGMA).to(self.device) if is_pose else torch.ones(nkpt, device=self.device) / nkpt
+        self.keypoint_loss = KeypointLoss(sigmas=sigmas)
+        # helper for segmentation loss computations
+        self.seg_helper = v8SegmentationLoss(model)
+        # helper for pose keypoint losses
+        self.pose_helper = v8PoseLoss(model)
+
+    def __call__(self, preds, batch):
+        # loss vec: box, seg, pose, kobj, cls, dfl
+        loss = torch.zeros(6, device=self.device)
+        # Unpack head outputs
+        feats, pred_masks, proto, pred_kpts = preds if len(preds) == 4 else preds[1]
+        batch_size = feats[0].shape[0]
+        mask_h, mask_w = proto.shape[2], proto.shape[3]
+
+        pred_distri, pred_scores = torch.cat([xi.view(batch_size, self.no, -1) for xi in feats], 2).split(
+            (self.reg_max * 4, self.nc), 1
+        )
+        pred_scores = pred_scores.permute(0, 2, 1).contiguous()
+        pred_distri = pred_distri.permute(0, 2, 1).contiguous()
+        pred_masks = pred_masks.permute(0, 2, 1).contiguous()
+        pred_kpts = pred_kpts.permute(0, 2, 1).contiguous()
+
+        dtype = pred_scores.dtype
+        imgsz = torch.tensor(feats[0].shape[2:], device=self.device, dtype=dtype) * self.stride[0]
+        anchor_points, stride_tensor = make_anchors(feats, self.stride, 0.5)
+
+        # Targets
+        batch_idx = batch["batch_idx"].view(-1, 1)
+        targets = torch.cat((batch_idx, batch["cls"].view(-1, 1), batch["bboxes"]), 1)
+        targets = self.preprocess(targets.to(self.device), batch_size, scale_tensor=imgsz[[1, 0, 1, 0]])
+        gt_labels, gt_bboxes = targets.split((1, 4), 2)
+        mask_gt = gt_bboxes.sum(2, keepdim=True).gt_(0.0)
+
+        # Boxes
+        pred_bboxes = self.bbox_decode(anchor_points, pred_distri)
+
+        _, target_bboxes, target_scores, fg_mask, target_gt_idx = self.assigner(
+            pred_scores.detach().sigmoid(),
+            (pred_bboxes.detach() * stride_tensor).type(gt_bboxes.dtype),
+            anchor_points * stride_tensor,
+            gt_labels,
+            gt_bboxes,
+            mask_gt,
+        )
+
+        target_scores_sum = max(target_scores.sum(), 1)
+
+        # cls
+        loss[4] = self.bce(pred_scores, target_scores.to(dtype)).sum() / target_scores_sum
+
+        if fg_mask.sum():
+            # bbox + dfl
+            target_bboxes /= stride_tensor
+            loss[0], loss[5] = self.bbox_loss(
+                pred_distri, pred_bboxes, anchor_points, target_bboxes, target_scores, target_scores_sum, fg_mask
+            )
+
+            # seg
+            masks = batch["masks"].to(self.device).float()
+            if tuple(masks.shape[-2:]) != (mask_h, mask_w):
+                masks = F.interpolate(masks[None], (mask_h, mask_w), mode="nearest")[0]
+            # Reuse segmentation loss routine
+            loss[1] = self.seg_helper.calculate_segmentation_loss(
+                fg_mask,
+                masks,
+                target_gt_idx,
+                target_bboxes,
+                batch_idx,
+                proto,
+                pred_masks,
+                imgsz,
+                self.overlap,
+            )
+
+            # pose
+            pred_kpts = v8PoseLoss.kpts_decode(anchor_points, pred_kpts.view(batch_size, -1, *self.kpt_shape))
+            keypoints = batch["keypoints"].to(self.device).float().clone()
+            keypoints[..., 0] *= imgsz[1]
+            keypoints[..., 1] *= imgsz[0]
+            kpts_loss, kobj_loss = self.pose_helper.calculate_keypoints_loss(
+                fg_mask,
+                target_gt_idx,
+                keypoints,
+                batch_idx,
+                stride_tensor,
+                target_bboxes,
+                pred_kpts,
+            )
+            loss[2] = kpts_loss
+            loss[3] = kobj_loss
+        else:
+            # keep grads
+            loss[1] += (proto * 0).sum() + (pred_masks * 0).sum()
+
+        # gains
+        loss[0] *= self.hyp.box
+        loss[1] *= self.hyp.box  # seg gain aligns with v8SegmentationLoss
+        loss[2] *= self.hyp.pose
+        loss[3] *= self.hyp.kobj
+        loss[4] *= self.hyp.cls
+        loss[5] *= self.hyp.dfl
+
+        return loss.sum() * batch_size, loss.detach()
+
 
 
 class v8ClassificationLoss:

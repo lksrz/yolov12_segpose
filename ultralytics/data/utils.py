@@ -118,15 +118,34 @@ def verify_image_label(args):
         if os.path.isfile(lb_file):
             nf = 1  # label found
             with open(lb_file) as f:
-                lb = [x.split() for x in f.read().strip().splitlines() if len(x)]
-                if any(len(x) > 6 for x in lb) and (not keypoint):  # is segment
-                    classes = np.array([x[0] for x in lb], dtype=np.float32)
-                    segments = [np.array(x[1:], dtype=np.float32).reshape(-1, 2) for x in lb]  # (cls, xy1...)
-                    lb = np.concatenate((classes.reshape(-1, 1), segments2boxes(segments)), 1)  # (cls, xywh)
-                lb = np.array(lb, dtype=np.float32)
+                rows = [x.split() for x in f.read().strip().splitlines() if len(x)]
+                if keypoint:
+                    # Accept combined labels: 5 + nkpt*ndim (+ optional segmentation polygon pairs)
+                    base_cols = 5 + nkpt * ndim
+                    parsed = []
+                    segs = []
+                    for r in rows:
+                        assert len(r) >= base_cols, f"labels require {base_cols} columns each"
+                        head = np.array(r[:base_cols], dtype=np.float32)
+                        parsed.append(head)
+                        extra = r[base_cols:]
+                        if extra:
+                            assert len(extra) % 2 == 0, "segmentation polygon must be x y pairs"
+                            segs.append(np.array(extra, dtype=np.float32).reshape(-1, 2))
+                        else:
+                            segs.append(np.zeros((0, 2), dtype=np.float32))
+                    lb = np.stack(parsed, axis=0) if parsed else np.zeros((0, base_cols), dtype=np.float32)
+                    segments = segs
+                else:
+                    # Detect/segment classic paths
+                    if any(len(x) > 6 for x in rows):  # is segment-only format (class + polygon)
+                        classes = np.array([x[0] for x in rows], dtype=np.float32)
+                        segments = [np.array(x[1:], dtype=np.float32).reshape(-1, 2) for x in rows]
+                        lb = np.concatenate((classes.reshape(-1, 1), segments2boxes(segments)), 1)
+                    else:
+                        lb = np.array(rows, dtype=np.float32)
             if nl := len(lb):
                 if keypoint:
-                    assert lb.shape[1] == (5 + nkpt * ndim), f"labels require {(5 + nkpt * ndim)} columns each"
                     points = lb[:, 5:].reshape(-1, ndim)[:, :2]
                 else:
                     assert lb.shape[1] == 5, f"labels require 5 columns, {lb.shape[1]} columns detected"
@@ -151,7 +170,7 @@ def verify_image_label(args):
                 lb = np.zeros((0, (5 + nkpt * ndim) if keypoint else 5), dtype=np.float32)
         else:
             nm = 1  # label missing
-            lb = np.zeros((0, (5 + nkpt * ndim) if keypoints else 5), dtype=np.float32)
+            lb = np.zeros((0, (5 + nkpt * ndim) if keypoint else 5), dtype=np.float32)
         if keypoint:
             keypoints = lb[:, 5:].reshape(-1, nkpt, ndim)
             if ndim == 2:

@@ -279,6 +279,82 @@ class Pose(Detect):
             return y
 
 
+class SegmentPose(Detect):
+    """YOLO combined Segment+Pose head for simultaneous instance masks and keypoints."""
+
+    def __init__(self, nc=80, nm=32, npr=256, kpt_shape=(17, 3), ch=()):
+        """Initialize SegmentPose with class, mask, proto, and keypoint branches."""
+        super().__init__(nc, ch)
+        # Segmentation branch
+        self.nm = nm  # number of masks
+        self.npr = npr  # number of protos
+        self.proto = Proto(ch[0], self.npr, self.nm)
+        c4m = max(ch[0] // 4, self.nm)
+        self.cv4m = nn.ModuleList(
+            nn.Sequential(Conv(x, c4m, 3), Conv(c4m, c4m, 3), nn.Conv2d(c4m, self.nm, 1)) for x in ch
+        )
+
+        # Pose branch
+        self.kpt_shape = kpt_shape  # (num_keypoints, dims)
+        self.nk = kpt_shape[0] * kpt_shape[1]
+        c4k = max(ch[0] // 4, self.nk)
+        self.cv4k = nn.ModuleList(
+            nn.Sequential(Conv(x, c4k, 3), Conv(c4k, c4k, 3), nn.Conv2d(c4k, self.nk, 1)) for x in ch
+        )
+
+    def forward(self, x):
+        """Return detection predictions with mask coefficients, proto, and keypoints."""
+        # Proto and mask coefficients
+        p = self.proto(x[0])  # (bs, npr, h, w)
+        bs = p.shape[0]
+        mc = torch.cat([self.cv4m[i](x[i]).view(bs, self.nm, -1) for i in range(self.nl)], 2)
+
+        # Keypoints raw (pre-decode)
+        kpt_raw = torch.cat([self.cv4k[i](x[i]).view(bs, self.nk, -1) for i in range(self.nl)], -1)
+
+        # Detect head
+        det = Detect.forward(self, x)
+        if self.training:
+            return det, mc, p, kpt_raw
+
+        # Decode keypoints to image coordinates for inference and append to main vector
+        pred_kpt = self.kpts_decode(bs, kpt_raw)
+
+        if self.export:
+            # Append both mask coeffs and decoded keypoints to the primary output for downstream slicing
+            return torch.cat([det, mc, pred_kpt], 1), p
+        else:
+            # Keep raw keypoints for loss while appending decoded keypoints to inference vector
+            return torch.cat([det[0], mc, pred_kpt], 1), (det[1], mc, p, kpt_raw)
+
+    def kpts_decode(self, bs, kpts):
+        """Decode keypoints similarly to Pose.kpts_decode with export contingencies."""
+        ndim = self.kpt_shape[1]
+        if self.export:
+            if self.format in {"tflite", "edgetpu"}:
+                # Precompute normalization factor to increase numerical stability
+                y = kpts.view(bs, *self.kpt_shape, -1)
+                grid_h, grid_w = self.shape[2], self.shape[3]
+                grid_size = torch.tensor([grid_w, grid_h], device=y.device).reshape(1, 2, 1)
+                norm = self.strides / (self.stride[0] * grid_size)
+                a = (y[:, :, :2] * 2.0 + (self.anchors - 0.5)) * norm
+            else:
+                # NCNN fix
+                y = kpts.view(bs, *self.kpt_shape, -1)
+                a = (y[:, :, :2] * 2.0 + (self.anchors - 0.5)) * self.strides
+            if ndim == 3:
+                a = torch.cat((a, y[:, :, 2:3].sigmoid()), 2)
+            return a.view(bs, self.nk, -1)
+        else:
+            y = kpts.clone()
+            if ndim == 3:
+                y[:, 2::3] = y[:, 2::3].sigmoid()
+            y[:, 0::ndim] = (y[:, 0::ndim] * 2.0 + (self.anchors[0] - 0.5)) * self.strides
+            y[:, 1::ndim] = (y[:, 1::ndim] * 2.0 + (self.anchors[1] - 0.5)) * self.strides
+            return y
+
+
+
 class Classify(nn.Module):
     """YOLO classification head, i.e. x(b,c1,20,20) to x(b,c2)."""
 
