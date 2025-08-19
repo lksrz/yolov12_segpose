@@ -184,11 +184,21 @@ class SegmentPoseValidator(DetectionValidator):
             if nl:
                 stat["tp"] = self._process_batch(predn, bbox, cls)
                 if pred_masks is not None:
+                    # Debug mask processing 
+                    if si == 0:  # Only debug first batch to avoid spam
+                        print(f"MASK DEBUG: pred_masks shape={pred_masks.shape if pred_masks is not None else None}")
+                        print(f"MASK DEBUG: pbatch[masks] shape={pbatch['masks'].shape}")
+                        print(f"MASK DEBUG: num predictions={len(predn)}, num gt masks={len(pbatch['masks'])}")
                     # Reuse segmentation validator logic for mask IoUs
                     from ultralytics.models.yolo.segment.val import SegmentationValidator
                     stat["tp_m"] = SegmentationValidator._process_batch(
                         self, predn, bbox, cls, pred_masks, pbatch["masks"], self.args.overlap_mask, masks=True
                     )
+                else:
+                    # No predicted masks - all zeros
+                    if si == 0:
+                        print("MASK DEBUG: pred_masks is None - no mask evaluation possible")
+                    stat["tp_m"] = torch.zeros(npr, self.niou, dtype=torch.bool, device=self.device)
                 # Reuse pose validator logic for keypoint OKS
                 from ultralytics.models.yolo.pose.val import PoseValidator
                 stat["tp_p"] = PoseValidator._process_batch(self, predn, bbox, cls, pred_kpts, pbatch["kpts"]) 
