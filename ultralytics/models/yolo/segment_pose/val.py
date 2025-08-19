@@ -91,19 +91,30 @@ class SegmentPoseValidator(DetectionValidator):
         # masks & kpts: split tail into [mask_coeffs | keypoints]
         nk, nd = (self.kpt_shape if isinstance(self.kpt_shape, (list, tuple)) else (pbatch["kpts"].shape[1], 3))
         kpt_dims = nk * nd
-        nm = int(proto.shape[1]) if proto is not None else 0
-        assert pred.shape[1] >= 6 + nm + kpt_dims, "Unexpected prediction width; cannot slice mask coeffs and keypoints"
-        # Use pre-scaled boxes for mask projection in model space; ensure coeffs match proto channels
+        nm = int(proto.shape[0]) if proto is not None else 0  # proto is indexed per batch item, shape (nm, h, w)
+        assert pred.shape[1] >= 6 + nm + kpt_dims, f"Pred width {pred.shape[1]} < required {6 + nm + kpt_dims}"
+        tail_w = max(pred.shape[1] - 6 - nm, 0)
+        mc = pred[:, 6 : 6 + nm]
+        # Ensure mask coeffs match proto channels
+        if proto is not None and nm > 0:
+            assert mc.shape[1] == proto.shape[0], f"Mask coeffs {mc.shape[1]} != proto channels {proto.shape[0]}"
+        # Use pre-scaled boxes for mask projection in model space
         pred_masks = (
-            ops.process_mask_native(proto, pred[:, 6 : 6 + nm], pred[:, :4], shape=pbatch["imgsz"]) if proto is not None else None
+            ops.process_mask_native(proto, mc, pred[:, :4], shape=pbatch["imgsz"]) if proto is not None else None
         )
-        # Keypoints from scaled preds
-        pred_kpts = predn[:, -kpt_dims:].view(len(predn), nk, nd)
+        # Keypoints from scaled preds (fallback to zeros if not present in NMS output)
+        if tail_w >= kpt_dims:
+            pred_kpts = predn[:, -kpt_dims:].view(len(predn), nk, nd)
+        else:
+            pred_kpts = torch.zeros((len(predn), nk, nd), device=predn.device, dtype=predn.dtype)
         ops.scale_coords(pbatch["imgsz"], pred_kpts, pbatch["ori_shape"], ratio_pad=pbatch["ratio_pad"])
         return predn, pred_masks, pred_kpts
 
     def update_metrics(self, preds, batch):
-        for si, (pred, proto) in enumerate(zip(preds[0], preds[1] if isinstance(preds, (list, tuple)) else [None] * len(preds[0]))):
+        # Extract proto tensor correctly: (feats, mask_coeffs, proto, kpt_raw)
+        proto_batch = preds[1][2] if isinstance(preds, (list, tuple)) and len(preds[1]) >= 3 else None
+        for si, pred in enumerate(preds[0]):
+            proto = proto_batch[si] if proto_batch is not None else None
             self.seen += 1
             npr = len(pred)
             stat = dict(
