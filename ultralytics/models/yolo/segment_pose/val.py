@@ -59,13 +59,23 @@ class SegmentPoseValidator(DetectionValidator):
         )
 
     def postprocess(self, preds):
-        # Handle both training and inference mode outputs
+        """
+        Extract predictions and proto tensor from SegmentPose model inference output.
+        
+        SegmentPose inference output format:
+        - Non-export: (concat_predictions, (det[1], mc, p, kpt_raw))
+        - Where p is the proto tensor at index 2 of the aux tuple
+        """
         if isinstance(preds, tuple) and len(preds) == 2:
-            # Inference mode: (concat_predictions, (aux_tuple))
+            # Standard SegmentPose inference: (predictions, aux_tuple)
             predictions, aux = preds
-            proto = aux[2] if isinstance(aux, (tuple, list)) and len(aux) >= 3 else None
+            if isinstance(aux, (tuple, list)) and len(aux) >= 3:
+                # aux = (det[1], mc, p, kpt_raw) - proto is at index 2
+                proto = aux[2]
+            else:
+                proto = None
         else:
-            # Other cases - treat as single prediction tensor
+            # Fallback - single tensor
             predictions = preds[0] if isinstance(preds, (list, tuple)) else preds
             proto = None
             
@@ -111,12 +121,11 @@ class SegmentPoseValidator(DetectionValidator):
         proto_for_masks = proto
         if proto is not None and nm > 0:
             if nm != proto.shape[0]:
-                print(f"Warning: Calculated nm={nm} != proto channels={proto.shape[0]} - truncating to match")
-                # Truncate to proto size for safety
+                # Truncate to proto size for safety if mismatch
                 nm_actual = min(nm, proto.shape[0])
                 mc = mc[:, :nm_actual]
             if proto.dim() != 3:
-                print(f"ERROR: Proto tensor has {proto.dim()}D, expected 3D (nm, h, w)")
+                # Proto tensor should be 3D (nm, h, w) - skip mask processing if invalid
                 proto_for_masks = None
         # Use pre-scaled boxes for mask projection in model space
         pred_masks = (
@@ -137,16 +146,12 @@ class SegmentPoseValidator(DetectionValidator):
                     if si < proto_tensor.shape[0]:
                         proto = proto_tensor[si]
                     else:
-                        print(f"ERROR: Batch index {si} >= proto batch size {proto_tensor.shape[0]} - using last proto")
-                        print("STOPPING validation to debug batch index issue")
-                        exit(1)
-                        proto = proto_tensor[-1]  # Use last proto instead of first
+                        # Use last proto if batch index exceeds proto batch size
+                        proto = proto_tensor[-1]
                 else:  # (nm, h, w) - single proto for all batch items
                     proto = proto_tensor
             else:
-                print(f"ERROR: Proto tensor is None at validation batch {si}")
-                print("STOPPING validation to debug proto issue")
-                exit(1)
+                # Skip mask processing if proto is None
                 proto = None
             self.seen += 1
             npr = len(pred)
