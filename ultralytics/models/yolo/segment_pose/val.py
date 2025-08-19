@@ -62,25 +62,28 @@ class SegmentPoseValidator(DetectionValidator):
         """
         Extract predictions and proto tensor from SegmentPose model inference output.
         
-        SegmentPose inference output format:
-        - Non-export: (concat_predictions, (det[1], mc, p, kpt_raw))
-        - Where p is the proto tensor at index 2 of the aux tuple
+        SegmentPose model outputs:
+        - Non-export PyTorch: (concat_predictions, (det[1], mc, p, kpt_raw))
+        - Exported format: similar to segment model format
         """
         if isinstance(preds, tuple) and len(preds) == 2:
-            # Standard SegmentPose inference: (predictions, aux_tuple)
             predictions, aux = preds
-            if isinstance(aux, (tuple, list)) and len(aux) >= 3:
-                # aux = (det[1], mc, p, kpt_raw) - proto is at index 2
-                proto = aux[2]
-                print(f"DEBUG postprocess: Found aux tuple len={len(aux)}, proto shape={proto.shape if proto is not None else None}")
+            if isinstance(aux, (tuple, list)):
+                if len(aux) >= 3:
+                    # PyTorch format: aux = (det[1], mc, p, kpt_raw) - proto at index 2
+                    proto = aux[2]
+                elif len(aux) == 1:
+                    # Exported format: aux is just the proto tensor
+                    proto = aux[0]
+                else:
+                    proto = None
             else:
-                proto = None
-                print(f"DEBUG postprocess: aux structure unexpected - type={type(aux)}, len={len(aux) if hasattr(aux, '__len__') else 'no len'}")
+                # aux is directly the proto tensor
+                proto = aux
         else:
             # Fallback - single tensor
             predictions = preds[0] if isinstance(preds, (list, tuple)) else preds
             proto = None
-            print(f"DEBUG postprocess: Non-standard preds structure - type={type(preds)}")
             
         p = ops.non_max_suppression(
             predictions,
@@ -130,12 +133,7 @@ class SegmentPoseValidator(DetectionValidator):
             if proto.dim() != 3:
                 # Proto tensor should be 3D (nm, h, w) - skip mask processing if invalid
                 proto_for_masks = None
-        else:
-            # Debug why proto is None - only show once to avoid spam
-            if proto is None and len(pred) > 0:
-                print(f"DEBUG _prepare_pred: proto is None (batch has {len(pred)} predictions)")
-            elif nm == 0:
-                print(f"DEBUG _prepare_pred: nm=0 (calculated mask_start={mask_start}, mask_end={mask_end}, pred.shape={pred.shape})")
+        # If proto is None, mask evaluation will be skipped
         
         # Use pre-scaled boxes for mask projection in model space
         pred_masks = (
