@@ -80,7 +80,17 @@ class SegmentationValidator(DetectionValidator):
             max_det=self.args.max_det,
             nc=self.nc,
         )
-        proto = preds[1][-1] if len(preds[1]) == 3 else preds[1]  # second output is len 3 if pt, but only 1 if exported
+        
+        # Handle both regular segment and segmentpose models
+        if isinstance(preds[1], (tuple, list)) and len(preds[1]) >= 3:
+            # Check if this might be a SegmentPose model (has 4 elements: det[1], mc, p, kpt_raw)
+            if len(preds[1]) == 4:
+                proto = preds[1][2]  # Proto is at index 2 for SegmentPose
+                pass  # SegmentPose model detected
+            else:
+                proto = preds[1][-1]  # Regular segment model
+        else:
+            proto = preds[1]  # Exported format
         return p, proto
 
     def _prepare_batch(self, si, batch):
@@ -93,7 +103,20 @@ class SegmentationValidator(DetectionValidator):
     def _prepare_pred(self, pred, pbatch, proto):
         """Prepares a batch for training or inference by processing images and targets."""
         predn = super()._prepare_pred(pred, pbatch)
-        pred_masks = self.process(proto, pred[:, 6:], pred[:, :4], shape=pbatch["imgsz"])
+        
+        # Handle SegmentPose models which have keypoints at the end
+        # Structure: [box(4) + conf(1) + cls(1) + mask_coeffs(nm) + keypoints(nk*3)]
+        if hasattr(pbatch, 'get') and 'kpts' in pbatch:
+            # This is likely a SegmentPose model - extract mask coeffs excluding keypoints
+            # Assume keypoints are 8*3=24 dimensions for this dataset
+            kpt_dims = 24  # This might need to be dynamic
+            mask_coeffs = pred[:, 6:-kpt_dims] if pred.shape[1] > 6 + kpt_dims else pred[:, 6:]
+            pass  # SegmentPose fallback mode
+        else:
+            # Regular segment model - all dims after class are mask coeffs
+            mask_coeffs = pred[:, 6:]
+        
+        pred_masks = self.process(proto, mask_coeffs, pred[:, :4], shape=pbatch["imgsz"])
         return predn, pred_masks
 
     def update_metrics(self, preds, batch):

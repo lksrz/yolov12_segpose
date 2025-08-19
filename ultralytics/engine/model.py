@@ -290,6 +290,18 @@ class Model(nn.Module, PyTorchModelHubMixin, repo_url="https://github.com/ultral
         if Path(weights).suffix == ".pt":
             self.model, self.ckpt = attempt_load_one_weight(weights)
             self.task = self.model.args["task"]
+            
+            # Special handling for SegmentPose models - ensure correct task and validator
+            if hasattr(self.model, 'model') and hasattr(self.model.model, '__getitem__'):
+                try:
+                    last_layer = self.model.model[-1]
+                    if hasattr(last_layer, '__class__') and 'SegmentPose' in str(last_layer.__class__):
+                        print(f"ENGINE: Detected SegmentPose model, forcing task from '{self.task}' to 'segment_pose'")
+                        self.task = "segment_pose"
+                        self.model.args["task"] = "segment_pose"
+                except (IndexError, AttributeError):
+                    pass
+            
             self.overrides = self.model.args = self._reset_ckpt_args(self.model.args)
             self.ckpt_path = self.model.pt_path
         else:

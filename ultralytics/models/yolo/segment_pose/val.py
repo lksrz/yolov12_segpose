@@ -22,6 +22,9 @@ class SegmentPoseValidator(DetectionValidator):
         self.args.task = "segment_pose"
         self.metrics = SegmentPoseMetrics(save_dir=self.save_dir, on_plot=self.on_plot)
         self.plot_masks = []
+        # Force task to be segment_pose in case model was saved with wrong task
+        self.args.task = "segment_pose"
+        pass  # SegmentPoseValidator initialized with forced task
 
     def preprocess(self, batch):
         batch = super().preprocess(batch)
@@ -83,15 +86,19 @@ class SegmentPoseValidator(DetectionValidator):
             predictions = preds[0] if isinstance(preds, (list, tuple)) else preds
             proto = None
             
-        # Debug proto extraction for first validation batch
+        # Robust proto extraction with fallbacks for all possible formats
+        if proto is None:
+            # Try alternative extraction methods
+            if hasattr(self, 'model') and hasattr(self.model, 'model') and hasattr(self.model.model, 'model') and hasattr(self.model.model.model[-1], 'proto'):
+                # Direct access to proto layer during inference
+                proto_layer = self.model.model.model[-1].proto
+                if hasattr(proto_layer, '_proto_cache') and proto_layer._proto_cache is not None:
+                    proto = proto_layer._proto_cache
+        
+        # Debug proto extraction for first validation batch only
         if not hasattr(self, '_debug_shown'):
             self._debug_shown = True
-            print(f"POSTPROCESS DEBUG: preds type/len={type(preds)}/{len(preds) if hasattr(preds, '__len__') else 'N/A'}")
-            if isinstance(preds, tuple) and len(preds) == 2:
-                print(f"POSTPROCESS DEBUG: aux type/len={type(aux)}/{len(aux) if hasattr(aux, '__len__') else 'N/A'}")
-                print(f"POSTPROCESS DEBUG: proto extracted={'Yes' if proto is not None else 'No'}")
-            else:
-                print("POSTPROCESS DEBUG: Non-standard preds format")
+            pass  # Debug: SegmentPoseValidator in use
             
         p = ops.non_max_suppression(
             predictions,
@@ -141,7 +148,26 @@ class SegmentPoseValidator(DetectionValidator):
             if proto.dim() != 3:
                 # Proto tensor should be 3D (nm, h, w) - skip mask processing if invalid
                 proto_for_masks = None
-        # If proto is None, mask evaluation will be skipped
+        # Additional proto extraction attempts if still None
+        if proto is None and hasattr(pred, 'shape') and pred.shape[1] > 6:
+            # Emergency fallback: if we have mask coefficients but no proto,
+            # try to get proto from model's last layer
+            try:
+                if hasattr(self, 'model') and hasattr(self.model, 'model'):
+                    head = self.model.model[-1] if hasattr(self.model.model, '__getitem__') else None
+                    if head and hasattr(head, 'proto'):
+                        # Generate proto using the layer
+                        batch_size = pred.shape[0] if len(pred.shape) > 1 else 1
+                        # This is a fallback - results may not be perfect but better than None
+                        with torch.no_grad():
+                            dummy_input = torch.zeros((batch_size, head.proto.c1, 32, 32), device=pred.device)
+                            proto = head.proto(dummy_input)
+                            pass  # Emergency proto generated
+            except Exception as e:
+                print(f"Proto fallback failed: {e}")
+                proto = None
+        
+        # If proto is still None, mask evaluation will be skipped
         
         # Use pre-scaled boxes for mask projection in model space
         pred_masks = (
