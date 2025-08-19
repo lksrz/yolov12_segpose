@@ -138,11 +138,15 @@ class SegmentPoseValidator(DetectionValidator):
                         proto = proto_tensor[si]
                     else:
                         print(f"ERROR: Batch index {si} >= proto batch size {proto_tensor.shape[0]} - using last proto")
+                        print("STOPPING validation to debug batch index issue")
+                        exit(1)
                         proto = proto_tensor[-1]  # Use last proto instead of first
                 else:  # (nm, h, w) - single proto for all batch items
                     proto = proto_tensor
             else:
                 print(f"ERROR: Proto tensor is None at validation batch {si}")
+                print("STOPPING validation to debug proto issue")
+                exit(1)
                 proto = None
             self.seen += 1
             npr = len(pred)
