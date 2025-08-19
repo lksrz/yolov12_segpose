@@ -114,7 +114,14 @@ class SegmentPoseValidator(DetectionValidator):
             # Use the minimum to avoid indexing errors
             nm_actual = min(mc.shape[1], proto.shape[0])
             mc = mc[:, :nm_actual]  # truncate mask coeffs if needed
-            proto_for_masks = proto[:nm_actual, :, :]  # truncate proto channels to match
+            # Handle different proto tensor dimensions
+            if proto.dim() == 3:  # (nm, h, w)
+                proto_for_masks = proto[:nm_actual, :, :]
+            elif proto.dim() == 2:  # malformed old model
+                print(f"Warning: Proto has only {proto.dim()}D, expected 3D. Old model compatibility mode.")
+                proto_for_masks = None  # disable mask processing for malformed models
+            else:
+                proto_for_masks = None
         # Use pre-scaled boxes for mask projection in model space
         pred_masks = (
             ops.process_mask_native(proto_for_masks, mc, pred[:, :4], shape=pbatch["imgsz"]) if proto_for_masks is not None else None
