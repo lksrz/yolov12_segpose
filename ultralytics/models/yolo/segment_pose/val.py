@@ -72,12 +72,15 @@ class SegmentPoseValidator(DetectionValidator):
             if isinstance(aux, (tuple, list)) and len(aux) >= 3:
                 # aux = (det[1], mc, p, kpt_raw) - proto is at index 2
                 proto = aux[2]
+                print(f"DEBUG postprocess: Found aux tuple len={len(aux)}, proto shape={proto.shape if proto is not None else None}")
             else:
                 proto = None
+                print(f"DEBUG postprocess: aux structure unexpected - type={type(aux)}, len={len(aux) if hasattr(aux, '__len__') else 'no len'}")
         else:
             # Fallback - single tensor
             predictions = preds[0] if isinstance(preds, (list, tuple)) else preds
             proto = None
+            print(f"DEBUG postprocess: Non-standard preds structure - type={type(preds)}")
             
         p = ops.non_max_suppression(
             predictions,
@@ -127,6 +130,13 @@ class SegmentPoseValidator(DetectionValidator):
             if proto.dim() != 3:
                 # Proto tensor should be 3D (nm, h, w) - skip mask processing if invalid
                 proto_for_masks = None
+        else:
+            # Debug why proto is None - only show once to avoid spam
+            if proto is None and len(pred) > 0:
+                print(f"DEBUG _prepare_pred: proto is None (batch has {len(pred)} predictions)")
+            elif nm == 0:
+                print(f"DEBUG _prepare_pred: nm=0 (calculated mask_start={mask_start}, mask_end={mask_end}, pred.shape={pred.shape})")
+        
         # Use pre-scaled boxes for mask projection in model space
         pred_masks = (
             ops.process_mask_native(proto_for_masks, mc, pred[:, :4], shape=pbatch["imgsz"]) if proto_for_masks is not None else None
@@ -184,11 +194,6 @@ class SegmentPoseValidator(DetectionValidator):
             if nl:
                 stat["tp"] = self._process_batch(predn, bbox, cls)
                 if pred_masks is not None:
-                    # Debug mask processing 
-                    if si == 0:  # Only debug first batch to avoid spam
-                        print(f"MASK DEBUG: pred_masks shape={pred_masks.shape if pred_masks is not None else None}")
-                        print(f"MASK DEBUG: pbatch[masks] shape={pbatch['masks'].shape}")
-                        print(f"MASK DEBUG: num predictions={len(predn)}, num gt masks={len(pbatch['masks'])}")
                     # Reuse segmentation validator logic for mask IoUs
                     from ultralytics.models.yolo.segment.val import SegmentationValidator
                     stat["tp_m"] = SegmentationValidator._process_batch(
@@ -196,8 +201,6 @@ class SegmentPoseValidator(DetectionValidator):
                     )
                 else:
                     # No predicted masks - all zeros
-                    if si == 0:
-                        print("MASK DEBUG: pred_masks is None - no mask evaluation possible")
                     stat["tp_m"] = torch.zeros(npr, self.niou, dtype=torch.bool, device=self.device)
                 # Reuse pose validator logic for keypoint OKS
                 from ultralytics.models.yolo.pose.val import PoseValidator
