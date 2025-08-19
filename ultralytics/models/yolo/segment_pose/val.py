@@ -118,10 +118,20 @@ class SegmentPoseValidator(DetectionValidator):
             if proto.dim() != 3:
                 print(f"ERROR: Proto tensor has {proto.dim()}D, expected 3D (nm, h, w)")
                 proto_for_masks = None
+        # Debug mask validation
+        if proto_for_masks is not None:
+            print(f"VAL_DEBUG: mc.shape={mc.shape}, proto.shape={proto_for_masks.shape}")
+            print(f"VAL_DEBUG: pred boxes shape={pred[:, :4].shape}, pbatch imgsz={pbatch['imgsz']}")
+        
         # Use pre-scaled boxes for mask projection in model space
         pred_masks = (
             ops.process_mask_native(proto_for_masks, mc, pred[:, :4], shape=pbatch["imgsz"]) if proto_for_masks is not None else None
         )
+        
+        if pred_masks is not None:
+            print(f"VAL_DEBUG: pred_masks.shape={pred_masks.shape}, pred_masks.sum()={pred_masks.sum()}")
+        else:
+            print("VAL_DEBUG: pred_masks is None!")
         # Keypoints from scaled preds
         pred_kpts = predn[:, -kpt_dims:].view(len(predn), nk, nd) if kpt_dims > 0 else torch.zeros((len(predn), nk, nd), device=predn.device, dtype=predn.dtype)
         ops.scale_coords(pbatch["imgsz"], pred_kpts, pbatch["ori_shape"], ratio_pad=pbatch["ratio_pad"])
@@ -169,12 +179,17 @@ class SegmentPoseValidator(DetectionValidator):
 
             if nl:
                 stat["tp"] = self._process_batch(predn, bbox, cls)
+                print(f"VALIDATION: pred_masks is {'NOT ' if pred_masks is None else ''}None, pbatch has {'masks' if 'masks' in pbatch else 'NO masks'}")
                 if pred_masks is not None:
+                    print(f"VALIDATION: Processing masks - pred_masks.shape={pred_masks.shape}")
                     # Reuse segmentation validator logic for mask IoUs
                     from ultralytics.models.yolo.segment.val import SegmentationValidator
                     stat["tp_m"] = SegmentationValidator._process_batch(
                         self, predn, bbox, cls, pred_masks, pbatch["masks"], self.args.overlap_mask, masks=True
                     )
+                    print(f"VALIDATION: tp_m.sum()={stat['tp_m'].sum()}")
+                else:
+                    print("VALIDATION: Skipping mask evaluation - pred_masks is None!")
                 # Reuse pose validator logic for keypoint OKS
                 from ultralytics.models.yolo.pose.val import PoseValidator
                 stat["tp_p"] = PoseValidator._process_batch(self, predn, bbox, cls, pred_kpts, pbatch["kpts"]) 

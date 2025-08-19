@@ -674,7 +674,8 @@ class SegPoseLoss(v8DetectionLoss):
             print(f"DEBUG: masks.shape={masks.shape}, proto.shape={proto.shape}, fg_mask.sum()={fg_mask.sum()}")
             print(f"DEBUG: pred_masks.shape={pred_masks.shape}, masks.sum()={masks.sum()}")
             
-            # Reuse segmentation loss routine
+            # The segmentation loss function expects mask coefficients, not projected masks
+            # pred_masks should have shape (batch_size, num_anchors, nm) for mask coefficients
             loss[1] = self.seg_helper.calculate_segmentation_loss(
                 fg_mask,
                 masks,
@@ -682,7 +683,7 @@ class SegPoseLoss(v8DetectionLoss):
                 target_bboxes,
                 batch_idx,
                 proto,
-                pred_masks,
+                pred_masks,  # These should be mask coefficients, not actual masks
                 imgsz,
                 self.overlap,
             )
