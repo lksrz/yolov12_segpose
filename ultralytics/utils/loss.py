@@ -669,6 +669,11 @@ class SegPoseLoss(v8DetectionLoss):
             masks = batch["masks"].to(self.device).float()
             if tuple(masks.shape[-2:]) != (mask_h, mask_w):
                 masks = F.interpolate(masks[None], (mask_h, mask_w), mode="nearest")[0]
+            
+            # Debug mask training
+            print(f"DEBUG: masks.shape={masks.shape}, proto.shape={proto.shape}, fg_mask.sum()={fg_mask.sum()}")
+            print(f"DEBUG: pred_masks.shape={pred_masks.shape}, masks.sum()={masks.sum()}")
+            
             # Reuse segmentation loss routine
             loss[1] = self.seg_helper.calculate_segmentation_loss(
                 fg_mask,
@@ -681,6 +686,7 @@ class SegPoseLoss(v8DetectionLoss):
                 imgsz,
                 self.overlap,
             )
+            print(f"DEBUG: seg_loss={loss[1].item()}")
 
             # pose
             pred_kpts = v8PoseLoss.kpts_decode(anchor_points, pred_kpts.view(batch_size, -1, *self.kpt_shape))
