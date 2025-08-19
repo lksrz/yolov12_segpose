@@ -290,6 +290,7 @@ class Model(nn.Module, PyTorchModelHubMixin, repo_url="https://github.com/ultral
         if Path(weights).suffix == ".pt":
             self.model, self.ckpt = attempt_load_one_weight(weights)
             self.task = self.model.args["task"]
+            print(f"MODEL LOADING DEBUG: Loading {weights}, task={self.task}")
             
             # Special handling for SegmentPose models - ensure correct task and validator
             if hasattr(self.model, 'model') and hasattr(self.model.model, '__getitem__'):
@@ -623,6 +624,7 @@ class Model(nn.Module, PyTorchModelHubMixin, repo_url="https://github.com/ultral
         validator=None,
         **kwargs: Any,
     ):
+        print(f"VAL METHOD DEBUG: task={self.task}, validator={type(validator).__name__ if validator else None}")
         """
         Validates the model using a specified dataset and validation configuration.
 
@@ -649,7 +651,15 @@ class Model(nn.Module, PyTorchModelHubMixin, repo_url="https://github.com/ultral
         custom = {"rect": True}  # method defaults
         args = {**self.overrides, **custom, **kwargs, "mode": "val"}  # highest priority args on the right
 
-        validator = (validator or self._smart_load("validator"))(args=args, _callbacks=self.callbacks)
+        smart_validator = self._smart_load("validator")
+        print(f"VAL DEBUG: Smart validator loaded: {smart_validator.__name__ if smart_validator else None}")
+        
+        final_validator_class = validator or smart_validator
+        print(f"VAL DEBUG: Using validator class: {final_validator_class.__name__ if final_validator_class else None}")
+        
+        validator = final_validator_class(args=args, _callbacks=self.callbacks)
+        print(f"VAL DEBUG: Validator instance created: {type(validator).__name__}")
+        
         validator(model=self.model)
         self.metrics = validator.metrics
         return validator.metrics
@@ -1105,9 +1115,14 @@ class Model(nn.Module, PyTorchModelHubMixin, repo_url="https://github.com/ultral
             - This method is typically used internally by other methods of the Model class.
             - The task_map attribute should be properly initialized with the correct mappings for each task.
         """
+        print(f"SMART_LOAD DEBUG: Loading {key} for task '{self.task}'")
+        print(f"SMART_LOAD DEBUG: Available tasks in task_map: {list(self.task_map.keys()) if hasattr(self, 'task_map') else 'No task_map'}")
         try:
-            return self.task_map[self.task][key]
+            result = self.task_map[self.task][key]
+            print(f"SMART_LOAD DEBUG: Successfully loaded {result.__name__} for {key}")
+            return result
         except Exception as e:
+            print(f"SMART_LOAD DEBUG: Failed to load {key} for task '{self.task}': {e}")
             name = self.__class__.__name__
             mode = inspect.stack()[1][3]  # get the function name.
             raise NotImplementedError(

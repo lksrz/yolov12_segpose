@@ -24,7 +24,7 @@ class SegmentPoseValidator(DetectionValidator):
         self.plot_masks = []
         # Force task to be segment_pose in case model was saved with wrong task
         self.args.task = "segment_pose"
-        pass  # SegmentPoseValidator initialized with forced task
+        print("VALIDATOR: SegmentPoseValidator is being used")
 
     def preprocess(self, batch):
         batch = super().preprocess(batch)
