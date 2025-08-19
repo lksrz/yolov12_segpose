@@ -522,16 +522,7 @@ class AutoBackend(nn.Module):
         # PyTorch
         if self.pt or self.nn_module:
             y = self.model(im, augment=augment, visualize=visualize, embed=embed)
-            # Debug AutoBackend output for SegmentPose models
-            if hasattr(self.model, 'model') and hasattr(self.model.model, '__getitem__'):
-                try:
-                    last_layer = self.model.model[-1]
-                    if hasattr(last_layer, '__class__') and 'SegmentPose' in str(last_layer.__class__):
-                        print(f"AUTOBACKEND DEBUG: SegmentPose model output type={type(y)}, len={len(y) if hasattr(y, '__len__') else 'N/A'}")
-                        if isinstance(y, (tuple, list)) and len(y) >= 2:
-                            print(f"AUTOBACKEND DEBUG: y[1] type={type(y[1])}, len={len(y[1]) if hasattr(y[1], '__len__') else 'N/A'}")
-                except:
-                    pass
+            # AutoBackend now preserves tuple structure for SegmentPose models
 
         # TorchScript
         elif self.jit:
@@ -709,7 +700,12 @@ class AutoBackend(nn.Module):
             if len(self.names) == 999 and (self.task == "segment" or len(y) == 2):  # segments and names not defined
                 nc = y[0].shape[1] - y[1].shape[1] - 4  # y = (1, 32, 160, 160), (1, 116, 8400)
                 self.names = {i: f"class{i}" for i in range(nc)}
-            return self.from_numpy(y[0]) if len(y) == 1 else [self.from_numpy(x) for x in y]
+            if len(y) == 1:
+                return self.from_numpy(y[0])
+            else:
+                # Preserve tuple structure for models that return tuples (e.g., SegmentPose)
+                items = [self.from_numpy(x) for x in y]
+                return tuple(items) if isinstance(y, tuple) else items
         else:
             return self.from_numpy(y)
 
