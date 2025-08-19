@@ -62,28 +62,36 @@ class SegmentPoseValidator(DetectionValidator):
         """
         Extract predictions and proto tensor from SegmentPose model inference output.
         
-        SegmentPose model outputs:
-        - Non-export PyTorch: (concat_predictions, (det[1], mc, p, kpt_raw))
-        - Exported format: similar to segment model format
+        SegmentPose model outputs based on head.py lines 323-328:
+        - Export mode: (concat_predictions, proto_tensor) 
+        - Non-export mode: (concat_predictions, (det[1], mc, proto_tensor, kpt_raw))
         """
         if isinstance(preds, tuple) and len(preds) == 2:
             predictions, aux = preds
             if isinstance(aux, (tuple, list)):
                 if len(aux) >= 3:
-                    # PyTorch format: aux = (det[1], mc, p, kpt_raw) - proto at index 2
+                    # Non-export PyTorch format: aux = (det[1], mc, p, kpt_raw) - proto at index 2
                     proto = aux[2]
-                elif len(aux) == 1:
-                    # Exported format: aux is just the proto tensor
-                    proto = aux[0]
                 else:
-                    proto = None
+                    # Some other tuple format - try first element  
+                    proto = aux[0] if len(aux) > 0 else None
             else:
-                # aux is directly the proto tensor
+                # Export format: aux is directly the proto tensor
                 proto = aux
         else:
-            # Fallback - single tensor
+            # Fallback - single tensor (shouldn't happen for SegmentPose)
             predictions = preds[0] if isinstance(preds, (list, tuple)) else preds
             proto = None
+            
+        # Debug proto extraction for first validation batch
+        if not hasattr(self, '_debug_shown'):
+            self._debug_shown = True
+            print(f"POSTPROCESS DEBUG: preds type/len={type(preds)}/{len(preds) if hasattr(preds, '__len__') else 'N/A'}")
+            if isinstance(preds, tuple) and len(preds) == 2:
+                print(f"POSTPROCESS DEBUG: aux type/len={type(aux)}/{len(aux) if hasattr(aux, '__len__') else 'N/A'}")
+                print(f"POSTPROCESS DEBUG: proto extracted={'Yes' if proto is not None else 'No'}")
+            else:
+                print("POSTPROCESS DEBUG: Non-standard preds format")
             
         p = ops.non_max_suppression(
             predictions,
