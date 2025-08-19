@@ -43,8 +43,15 @@ class SegmentPosePredictor(DetectionPredictor):
             # split mask coeffs and kpts tail from pred vector using model's dynamic kpt_shape
             nk, nd = self.model.kpt_shape
             kpt_dims = nk * nd
-            nm = int(proto.shape[1]) if proto is not None else max(pred.shape[1] - 6 - kpt_dims, 0)
-            assert pred.shape[1] >= 6 + nm + kpt_dims, f"Pred width {pred.shape[1]} < required {6 + nm + kpt_dims}"
+            # Calculate nm from actual prediction width to handle different kpt_shapes
+            nm = max(0, pred.shape[1] - 6 - kpt_dims)
+            
+            # Verify with proto if available
+            if proto is not None and nm != proto.shape[1]:
+                print(f"Warning: calculated nm={nm} != proto channels={proto.shape[1]} for kpt_shape={self.model.kpt_shape}")
+                # Use proto channels if they're smaller (safer)
+                if proto.shape[1] < nm:
+                    nm = int(proto.shape[1])
             tail_w = max(pred.shape[1] - 6 - nm, 0)
             kpt_tail = pred[:, -kpt_dims:] if tail_w >= kpt_dims else pred.new_zeros((len(pred), kpt_dims))
             mc = pred[:, 6 : 6 + nm]

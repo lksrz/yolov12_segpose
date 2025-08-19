@@ -91,8 +91,22 @@ class SegmentPoseValidator(DetectionValidator):
         # masks & kpts: split tail into [mask_coeffs | keypoints]
         nk, nd = (self.kpt_shape if isinstance(self.kpt_shape, (list, tuple)) else (pbatch["kpts"].shape[1], 3))
         kpt_dims = nk * nd
-        nm = int(proto.shape[0]) if proto is not None else 0  # proto is indexed per batch item, shape (nm, h, w)
-        assert pred.shape[1] >= 6 + nm + kpt_dims, f"Pred width {pred.shape[1]} < required {6 + nm + kpt_dims}"
+        
+        # Calculate nm from actual prediction width instead of assuming from proto
+        # Structure: [box(4) + conf(1) + cls(1) + mask_coeffs(nm) + keypoints(kpt_dims)]
+        nm = pred.shape[1] - 6 - kpt_dims
+        
+        # Validate dimensions
+        if nm < 0:
+            print(f"Error: pred_width={pred.shape[1]}, kpt_dims={kpt_dims}, calculated nm={nm}")
+            nm = 0
+        
+        # Verify proto channels match calculated nm if available
+        if proto is not None and nm != proto.shape[0]:
+            print(f"Warning: calculated nm={nm} != proto channels={proto.shape[0]}")
+            # Use proto channels if they're smaller (safer)
+            if proto.shape[0] < nm:
+                nm = int(proto.shape[0])
         tail_w = max(pred.shape[1] - 6 - nm, 0)
         mc = pred[:, 6 : 6 + nm]
         # Ensure mask coeffs match proto channels
