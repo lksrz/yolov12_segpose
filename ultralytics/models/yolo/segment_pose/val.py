@@ -59,8 +59,18 @@ class SegmentPoseValidator(DetectionValidator):
         )
 
     def postprocess(self, preds):
+        # Handle both training and inference mode outputs
+        if isinstance(preds, tuple) and len(preds) == 2:
+            # Inference mode: (concat_predictions, (aux_tuple))
+            predictions, aux = preds
+            proto = aux[2] if isinstance(aux, (tuple, list)) and len(aux) >= 3 else None
+        else:
+            # Other cases - treat as single prediction tensor
+            predictions = preds[0] if isinstance(preds, (list, tuple)) else preds
+            proto = None
+            
         p = ops.non_max_suppression(
-            preds[0] if isinstance(preds, (list, tuple)) else preds,
+            predictions,
             self.args.conf,
             self.args.iou,
             labels=self.lb,
@@ -69,8 +79,6 @@ class SegmentPoseValidator(DetectionValidator):
             max_det=self.args.max_det,
             nc=self.nc,
         )
-        # Aux for segment_pose is (feats, mask_coeffs, proto, kpt_raw)
-        proto = preds[1][2] if isinstance(preds, (list, tuple)) else None
         return p, proto
 
     def _prepare_batch(self, si, batch):
@@ -135,10 +143,17 @@ class SegmentPoseValidator(DetectionValidator):
         return predn, pred_masks, pred_kpts
 
     def update_metrics(self, preds, batch):
-        # Extract proto tensor correctly: (feats, mask_coeffs, proto, kpt_raw)
-        proto_batch = preds[1][2] if isinstance(preds, (list, tuple)) and len(preds[1]) >= 3 else None
-        for si, pred in enumerate(preds[0]):
-            proto = proto_batch[si] if proto_batch is not None else None
+        # preds is (predictions_list, proto_tensor) from postprocess
+        predictions, proto_tensor = preds[0], preds[1]  
+        for si, pred in enumerate(predictions):
+            # proto_tensor is shared across batch, index by batch item if 4D, use as-is if 3D
+            if proto_tensor is not None:
+                if proto_tensor.dim() == 4:  # (B, nm, h, w)
+                    proto = proto_tensor[si] if si < proto_tensor.shape[0] else proto_tensor[0]
+                else:  # (nm, h, w) - single proto for all batch items
+                    proto = proto_tensor
+            else:
+                proto = None
             self.seen += 1
             npr = len(pred)
             stat = dict(
