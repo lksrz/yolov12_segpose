@@ -100,45 +100,30 @@ class SegmentPoseValidator(DetectionValidator):
         nk, nd = (self.kpt_shape if isinstance(self.kpt_shape, (list, tuple)) else (pbatch["kpts"].shape[1], 3))
         kpt_dims = nk * nd
         
-        # Use proto channels directly if available, otherwise calculate from pred width
-        if proto is not None:
-            nm = int(proto.shape[0])
-        else:
-            # Fallback: calculate from prediction width
-            nm = max(0, pred.shape[1] - 6 - kpt_dims)
+        # Use YOLOv12-seg approach: slice mask coeffs as everything between boxes and keypoints
+        # Structure: [box(4) + conf(1) + cls(1) + mask_coeffs(nm) + keypoints(kpt_dims)]
+        mask_start = 6
+        mask_end = pred.shape[1] - kpt_dims
+        mc = pred[:, mask_start:mask_end]
+        nm = mc.shape[1]  # Actual number of mask coefficients
         
-        # Validate the prediction vector can accommodate this nm
-        required_width = 6 + nm + kpt_dims
-        if pred.shape[1] < required_width:
-            print(f"Warning: pred_width={pred.shape[1]} < required={required_width} (nm={nm}, kpt_dims={kpt_dims})")
-            # Adjust nm to fit actual prediction
-            nm = max(0, pred.shape[1] - 6 - kpt_dims)
-        tail_w = max(pred.shape[1] - 6 - nm, 0)
-        mc = pred[:, 6 : 6 + nm]
-        # Handle mismatch between mask coeffs and proto channels
+        # Validate against proto if available
         proto_for_masks = proto
-        if proto is not None and nm > 0 and mc.shape[1] != proto.shape[0]:
-            print(f"Warning: Mask coeffs {mc.shape[1]} != proto channels {proto.shape[0]}, truncating to smaller")
-            # Use the minimum to avoid indexing errors
-            nm_actual = min(mc.shape[1], proto.shape[0])
-            mc = mc[:, :nm_actual]  # truncate mask coeffs if needed
-            # Handle different proto tensor dimensions
-            if proto.dim() == 3:  # (nm, h, w)
-                proto_for_masks = proto[:nm_actual, :, :]
-            elif proto.dim() == 2:  # malformed old model
-                print(f"Warning: Proto has only {proto.dim()}D, expected 3D. Old model compatibility mode.")
-                proto_for_masks = None  # disable mask processing for malformed models
-            else:
+        if proto is not None and nm > 0:
+            if nm != proto.shape[0]:
+                print(f"Warning: Calculated nm={nm} != proto channels={proto.shape[0]} - truncating to match")
+                # Truncate to proto size for safety
+                nm_actual = min(nm, proto.shape[0])
+                mc = mc[:, :nm_actual]
+            if proto.dim() != 3:
+                print(f"ERROR: Proto tensor has {proto.dim()}D, expected 3D (nm, h, w)")
                 proto_for_masks = None
         # Use pre-scaled boxes for mask projection in model space
         pred_masks = (
             ops.process_mask_native(proto_for_masks, mc, pred[:, :4], shape=pbatch["imgsz"]) if proto_for_masks is not None else None
         )
-        # Keypoints from scaled preds (fallback to zeros if not present in NMS output)
-        if tail_w >= kpt_dims:
-            pred_kpts = predn[:, -kpt_dims:].view(len(predn), nk, nd)
-        else:
-            pred_kpts = torch.zeros((len(predn), nk, nd), device=predn.device, dtype=predn.dtype)
+        # Keypoints from scaled preds
+        pred_kpts = predn[:, -kpt_dims:].view(len(predn), nk, nd) if kpt_dims > 0 else torch.zeros((len(predn), nk, nd), device=predn.device, dtype=predn.dtype)
         ops.scale_coords(pbatch["imgsz"], pred_kpts, pbatch["ori_shape"], ratio_pad=pbatch["ratio_pad"])
         return predn, pred_masks, pred_kpts
 

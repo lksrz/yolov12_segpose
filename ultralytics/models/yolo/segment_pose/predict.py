@@ -40,24 +40,22 @@ class SegmentPosePredictor(DetectionPredictor):
                 results.append(Results(orig_img, path=img_path, names=self.model.names, boxes=empty_boxes))
                 continue
 
-            # split mask coeffs and kpts tail from pred vector using model's dynamic kpt_shape
+            # Use YOLOv12-seg approach: slice mask coeffs as everything between boxes and keypoints
             nk, nd = self.model.kpt_shape
             kpt_dims = nk * nd
-            # Calculate nm from actual prediction width to handle different kpt_shapes
-            nm = max(0, pred.shape[1] - 6 - kpt_dims)
+            # Structure: [box(4) + conf(1) + cls(1) + mask_coeffs(nm) + keypoints(kpt_dims)]
+            mask_start = 6
+            mask_end = pred.shape[1] - kpt_dims
+            mc = pred[:, mask_start:mask_end]
+            nm = mc.shape[1]  # Actual number of mask coefficients
             
-            # Verify with proto if available
-            if proto is not None and nm != proto.shape[1]:
-                print(f"Warning: calculated nm={nm} != proto channels={proto.shape[1]} for kpt_shape={self.model.kpt_shape}")
-                # Use proto channels if they're smaller (safer)
-                if proto.shape[1] < nm:
-                    nm = int(proto.shape[1])
-            tail_w = max(pred.shape[1] - 6 - nm, 0)
-            kpt_tail = pred[:, -kpt_dims:] if tail_w >= kpt_dims else pred.new_zeros((len(pred), kpt_dims))
-            mc = pred[:, 6 : 6 + nm]
-            # Ensure mask coeffs match proto channels
-            if proto is not None and nm > 0:
-                assert mc.shape[1] == proto.shape[1], f"Mask coeffs {mc.shape[1]} != proto channels {proto.shape[1]}"
+            kpt_tail = pred[:, -kpt_dims:] if kpt_dims > 0 else pred.new_zeros((len(pred), 0))
+            
+            # Validate against proto if available
+            if proto is not None and nm > 0 and nm != proto.shape[1]:
+                print(f"Warning: Calculated nm={nm} != proto channels={proto.shape[1]} - truncating to match")
+                nm_actual = min(nm, proto.shape[1])
+                mc = mc[:, :nm_actual]
 
             # masks
             if self.args.retina_masks:
