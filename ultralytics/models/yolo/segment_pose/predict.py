@@ -43,9 +43,10 @@ class SegmentPosePredictor(DetectionPredictor):
             # split mask coeffs and kpts tail from pred vector using model's dynamic kpt_shape
             nk, nd = self.model.kpt_shape
             kpt_dims = nk * nd
-            assert pred.shape[1] >= 6 + kpt_dims, "Unexpected prediction width; cannot slice mask coeffs and keypoints"
+            nm = int(proto.shape[1]) if proto is not None else pred.shape[1] - 6 - kpt_dims
+            assert pred.shape[1] >= 6 + nm + kpt_dims, "Unexpected prediction width; cannot slice mask coeffs and keypoints"
             kpt_tail = pred[:, -kpt_dims:]
-            mc = pred[:, 6:-kpt_dims]
+            mc = pred[:, 6 : 6 + nm]
 
             # masks
             if self.args.retina_masks:

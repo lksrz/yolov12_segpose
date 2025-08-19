@@ -91,10 +91,11 @@ class SegmentPoseValidator(DetectionValidator):
         # masks & kpts: split tail into [mask_coeffs | keypoints]
         nk, nd = (self.kpt_shape if isinstance(self.kpt_shape, (list, tuple)) else (pbatch["kpts"].shape[1], 3))
         kpt_dims = nk * nd
-        assert pred.shape[1] >= 6 + kpt_dims, "Unexpected prediction width; cannot slice mask coeffs and keypoints"
-        # Use pre-scaled boxes for mask projection in model space
+        nm = int(proto.shape[1]) if proto is not None else 0
+        assert pred.shape[1] >= 6 + nm + kpt_dims, "Unexpected prediction width; cannot slice mask coeffs and keypoints"
+        # Use pre-scaled boxes for mask projection in model space; ensure coeffs match proto channels
         pred_masks = (
-            ops.process_mask_native(proto, pred[:, 6:-kpt_dims], pred[:, :4], shape=pbatch["imgsz"]) if proto is not None else None
+            ops.process_mask_native(proto, pred[:, 6 : 6 + nm], pred[:, :4], shape=pbatch["imgsz"]) if proto is not None else None
         )
         # Keypoints from scaled preds
         pred_kpts = predn[:, -kpt_dims:].view(len(predn), nk, nd)
