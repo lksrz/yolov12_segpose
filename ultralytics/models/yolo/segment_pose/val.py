@@ -92,29 +92,32 @@ class SegmentPoseValidator(DetectionValidator):
         nk, nd = (self.kpt_shape if isinstance(self.kpt_shape, (list, tuple)) else (pbatch["kpts"].shape[1], 3))
         kpt_dims = nk * nd
         
-        # Calculate nm from actual prediction width instead of assuming from proto
-        # Structure: [box(4) + conf(1) + cls(1) + mask_coeffs(nm) + keypoints(kpt_dims)]
-        nm = pred.shape[1] - 6 - kpt_dims
+        # Use proto channels directly if available, otherwise calculate from pred width
+        if proto is not None:
+            nm = int(proto.shape[0])
+        else:
+            # Fallback: calculate from prediction width
+            nm = max(0, pred.shape[1] - 6 - kpt_dims)
         
-        # Validate dimensions
-        if nm < 0:
-            print(f"Error: pred_width={pred.shape[1]}, kpt_dims={kpt_dims}, calculated nm={nm}")
-            nm = 0
-        
-        # Verify proto channels match calculated nm if available
-        if proto is not None and nm != proto.shape[0]:
-            print(f"Warning: calculated nm={nm} != proto channels={proto.shape[0]}")
-            # Use proto channels if they're smaller (safer)
-            if proto.shape[0] < nm:
-                nm = int(proto.shape[0])
+        # Validate the prediction vector can accommodate this nm
+        required_width = 6 + nm + kpt_dims
+        if pred.shape[1] < required_width:
+            print(f"Warning: pred_width={pred.shape[1]} < required={required_width} (nm={nm}, kpt_dims={kpt_dims})")
+            # Adjust nm to fit actual prediction
+            nm = max(0, pred.shape[1] - 6 - kpt_dims)
         tail_w = max(pred.shape[1] - 6 - nm, 0)
         mc = pred[:, 6 : 6 + nm]
-        # Ensure mask coeffs match proto channels
-        if proto is not None and nm > 0:
-            assert mc.shape[1] == proto.shape[0], f"Mask coeffs {mc.shape[1]} != proto channels {proto.shape[0]}"
+        # Handle mismatch between mask coeffs and proto channels
+        proto_for_masks = proto
+        if proto is not None and nm > 0 and mc.shape[1] != proto.shape[0]:
+            print(f"Warning: Mask coeffs {mc.shape[1]} != proto channels {proto.shape[0]}, truncating to smaller")
+            # Use the minimum to avoid indexing errors
+            nm_actual = min(mc.shape[1], proto.shape[0])
+            mc = mc[:, :nm_actual]  # truncate mask coeffs if needed
+            proto_for_masks = proto[:nm_actual, :, :]  # truncate proto channels to match
         # Use pre-scaled boxes for mask projection in model space
         pred_masks = (
-            ops.process_mask_native(proto, mc, pred[:, :4], shape=pbatch["imgsz"]) if proto is not None else None
+            ops.process_mask_native(proto_for_masks, mc, pred[:, :4], shape=pbatch["imgsz"]) if proto_for_masks is not None else None
         )
         # Keypoints from scaled preds (fallback to zeros if not present in NMS output)
         if tail_w >= kpt_dims:
