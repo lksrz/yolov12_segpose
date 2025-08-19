@@ -522,6 +522,16 @@ class AutoBackend(nn.Module):
         # PyTorch
         if self.pt or self.nn_module:
             y = self.model(im, augment=augment, visualize=visualize, embed=embed)
+            # Debug AutoBackend output for SegmentPose models
+            if hasattr(self.model, 'model') and hasattr(self.model.model, '__getitem__'):
+                try:
+                    last_layer = self.model.model[-1]
+                    if hasattr(last_layer, '__class__') and 'SegmentPose' in str(last_layer.__class__):
+                        print(f"AUTOBACKEND DEBUG: SegmentPose model output type={type(y)}, len={len(y) if hasattr(y, '__len__') else 'N/A'}")
+                        if isinstance(y, (tuple, list)) and len(y) >= 2:
+                            print(f"AUTOBACKEND DEBUG: y[1] type={type(y[1])}, len={len(y[1]) if hasattr(y[1], '__len__') else 'N/A'}")
+                except:
+                    pass
 
         # TorchScript
         elif self.jit:
