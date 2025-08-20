@@ -277,7 +277,7 @@ class YOLODataset(BaseDataset):
                 safe_list = []
                 for v in value:
                     if isinstance(v, torch.Tensor):
-                        safe_list.append(v)
+                        t = v
                     else:
                         # Convert numpy arrays/lists to torch tensors
                         try:
@@ -285,7 +285,27 @@ class YOLODataset(BaseDataset):
                         except Exception:
                             # Fallback: empty tensor if conversion fails
                             t = torch.zeros(0)
-                        safe_list.append(t)
+                    # Per-key shape normalization before alignment
+                    if k == "masks":
+                        if t.ndim == 2:  # (H, W) -> (1, H, W)
+                            t = t.unsqueeze(0)
+                        elif t.ndim == 1 and t.numel() == 0:
+                            # will be aligned later
+                            pass
+                    elif k == "bboxes":
+                        if t.ndim == 1 and (t.numel() % 4 == 0):
+                            t = t.view(-1, 4)
+                    elif k == "obb":
+                        if t.ndim == 1 and (t.numel() % 5 == 0):
+                            t = t.view(-1, 5)
+                    elif k == "cls":
+                        if t.ndim == 1:
+                            t = t.view(-1, 1)
+                    elif k == "keypoints":
+                        # leave to ref alignment if empty; common cases are (n, k, d)
+                        if t.ndim == 2 and t.shape[0] == 0:
+                            pass
+                    safe_list.append(t)
                 # Align empty tensors to reference shape to avoid 3D vs 1D mismatches
                 ref = next((x for x in safe_list if isinstance(x, torch.Tensor) and x.numel() > 0), None)
                 if ref is not None:
@@ -297,6 +317,8 @@ class YOLODataset(BaseDataset):
                             x = torch.zeros(empty_shape, dtype=ref.dtype)
                         elif k == "cls" and x.ndim == 1:
                             x = x.view(-1, 1)
+                        elif k == "masks" and x.ndim == 2 and ref.ndim == 3:
+                            x = x.unsqueeze(0)
                         aligned.append(x)
                     safe_list = aligned
                 else:
