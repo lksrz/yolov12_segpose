@@ -2157,6 +2157,9 @@ class Format:
             cls = cls[sorted_idx]
         else:
             masks = polygons2masks((h, w), segments, color=1, downsample_ratio=self.mask_ratio)
+            # Ensure shape is (n, H, W); if none, return (0, H, W)
+            if isinstance(masks, np.ndarray) and masks.ndim == 2:
+                masks = masks[None]
 
         return masks, instances, cls
 

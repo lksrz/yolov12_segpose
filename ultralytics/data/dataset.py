@@ -241,7 +241,15 @@ class YOLODataset(BaseDataset):
             bboxes = np.array(filtered_bboxes, dtype=np.float32) if filtered_bboxes else np.zeros((0, 4), dtype=np.float32)
             segments = filtered_segments
             if keypoints is not None:
-                keypoints = np.array(filtered_keypoints, dtype=np.float32) if filtered_keypoints else np.zeros((0, *keypoints.shape[1:]), dtype=np.float32)
+                if filtered_keypoints:
+                    keypoints = np.array(filtered_keypoints, dtype=np.float32)
+                else:
+                    # Preserve last-known nk, nd if possible
+                    if isinstance(keypoints, np.ndarray) and keypoints.ndim == 3:
+                        nk, nd = keypoints.shape[1], keypoints.shape[2]
+                    else:
+                        nk, nd = 0, 3
+                    keypoints = np.zeros((0, nk, nd), dtype=np.float32)
             # record kept indices so downstream can align 'cls'
             label["seg_keep_idx"] = np.array(keep_indices, dtype=np.int64)
             # align cls to filtered instances

@@ -270,6 +270,10 @@ def polygons2masks(imgsz, polygons, color, downsample_ratio=1):
     Returns:
         (np.ndarray): A set of binary masks of the specified image size with the polygons filled in.
     """
+    # Handle empty input robustly by returning an empty mask tensor with consistent dims (0, H, W)
+    if polygons is None or len(polygons) == 0:
+        nh, nw = (imgsz[0] // downsample_ratio, imgsz[1] // downsample_ratio)
+        return np.zeros((0, nh, nw), dtype=np.uint8)
     return np.array([polygon2mask(imgsz, [x.reshape(-1)], color, downsample_ratio) for x in polygons])
 
 
