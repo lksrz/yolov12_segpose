@@ -373,8 +373,10 @@ class v8SegmentationLoss(v8DetectionLoss):
             predicted masks from the prototype masks and predicted mask coefficients.
         """
         eps = 1e-6
-        pred_mask = torch.einsum("in,nhw->ihw", pred, proto)  # (n, 32) @ (32, H, W) -> (n, H, W)
-        loss = F.binary_cross_entropy_with_logits(pred_mask, gt_mask, reduction="none")
+        # Compute mask loss in full precision to avoid AMP overflow/underflow
+        with autocast(enabled=False):
+            pred_mask = torch.einsum("in,nhw->ihw", pred.float(), proto.float())  # (n, 32) @ (32, H, W) -> (n, H, W)
+            loss = F.binary_cross_entropy_with_logits(pred_mask, gt_mask.float(), reduction="none")
         cropped = crop_mask(loss, xyxy)  # (n, H, W) with zeros outside boxes
         # Safe mean and safe area to avoid inf/NaN for tiny or degenerate boxes
         per_inst = cropped.mean(dim=(1, 2)) / (area.clamp_min(eps))
