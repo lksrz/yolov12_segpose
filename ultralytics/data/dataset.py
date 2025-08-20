@@ -220,11 +220,32 @@ class YOLODataset(BaseDataset):
         # NOTE: do NOT resample oriented boxes
         segment_resamples = 100 if self.use_obb else 1000
         if len(segments) > 0:
-            # make sure segments interpolate correctly if original length is greater than segment_resamples
-            max_len = max(len(s) for s in segments)
-            segment_resamples = (max_len + 1) if segment_resamples < max_len else segment_resamples
-            # list[np.array(segment_resamples, 2)] * num_samples
-            segments = np.stack(resample_segments(segments, n=segment_resamples), axis=0)
+            # Option A (default now): skip segmentation training for instances without polygons
+            # Filter out empty polygons instead of fabricating rectangles
+            filtered_bboxes = []
+            filtered_segments = []
+            filtered_keypoints = [] if keypoints is not None else None
+            keep_indices = []
+            for i, s in enumerate(segments):
+                if s is not None and len(s) >= 3:
+                    keep_indices.append(i)
+                    filtered_bboxes.append(bboxes[i])
+                    filtered_segments.append(s)
+                    if keypoints is not None:
+                        filtered_keypoints.append(keypoints[i])
+
+            bboxes = np.array(filtered_bboxes, dtype=np.float32) if filtered_bboxes else np.zeros((0, 4), dtype=np.float32)
+            segments = filtered_segments
+            if keypoints is not None:
+                keypoints = np.array(filtered_keypoints, dtype=np.float32) if filtered_keypoints else np.zeros((0, *keypoints.shape[1:]), dtype=np.float32)
+
+            # Resample remaining polygons uniformly
+            if len(segments) > 0:
+                max_len = max(len(s) for s in segments)
+                segment_resamples = (max_len + 1) if segment_resamples < max_len else segment_resamples
+                segments = np.stack(resample_segments(segments, n=segment_resamples), axis=0)
+            else:
+                segments = np.zeros((0, segment_resamples, 2), dtype=np.float32)
         else:
             segments = np.zeros((0, segment_resamples, 2), dtype=np.float32)
         label["instances"] = Instances(bboxes, segments, keypoints, bbox_format=bbox_format, normalized=normalized)
