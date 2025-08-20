@@ -372,9 +372,14 @@ class v8SegmentationLoss(v8DetectionLoss):
             The function uses the equation pred_mask = torch.einsum('in,nhw->ihw', pred, proto) to produce the
             predicted masks from the prototype masks and predicted mask coefficients.
         """
-        pred_mask = torch.einsum("in,nhw->ihw", pred, proto)  # (n, 32) @ (32, 80, 80) -> (n, 80, 80)
+        eps = 1e-6
+        pred_mask = torch.einsum("in,nhw->ihw", pred, proto)  # (n, 32) @ (32, H, W) -> (n, H, W)
         loss = F.binary_cross_entropy_with_logits(pred_mask, gt_mask, reduction="none")
-        return (crop_mask(loss, xyxy).mean(dim=(1, 2)) / area).sum()
+        cropped = crop_mask(loss, xyxy)  # (n, H, W) with zeros outside boxes
+        # Safe mean and safe area to avoid inf/NaN for tiny or degenerate boxes
+        per_inst = cropped.mean(dim=(1, 2)) / (area.clamp_min(eps))
+        per_inst = torch.nan_to_num(per_inst, nan=0.0, posinf=0.0, neginf=0.0)
+        return per_inst.sum()
 
     def calculate_segmentation_loss(
         self,
@@ -416,8 +421,8 @@ class v8SegmentationLoss(v8DetectionLoss):
         # Normalize to 0-1
         target_bboxes_normalized = target_bboxes / imgsz[[1, 0, 1, 0]]
 
-        # Areas of target bboxes
-        marea = xyxy2xywh(target_bboxes_normalized)[..., 2:].prod(2)
+        # Areas of target bboxes (normalized), clamp to avoid division overflow
+        marea = xyxy2xywh(target_bboxes_normalized)[..., 2:].prod(2).clamp_min(1e-6)
 
         # Normalize to mask size
         mxyxy = target_bboxes_normalized * torch.tensor([mask_w, mask_h, mask_w, mask_h], device=proto.device)
@@ -432,9 +437,14 @@ class v8SegmentationLoss(v8DetectionLoss):
                 else:
                     gt_mask = masks[batch_idx.view(-1) == i][mask_idx]
 
-                loss += self.single_mask_loss(
-                    gt_mask, pred_masks_i[fg_mask_i], proto_i, mxyxy_i[fg_mask_i], marea_i[fg_mask_i]
-                )
+                # Compute pixel-space box area to drop pathological near-zero crops
+                xyxy_pix = mxyxy_i[fg_mask_i]
+                pix_area = (xyxy_pix[:, 2] - xyxy_pix[:, 0]).clamp_min(0) * (xyxy_pix[:, 3] - xyxy_pix[:, 1]).clamp_min(0)
+                valid = pix_area > 0
+                if valid.any():
+                    loss += self.single_mask_loss(
+                        gt_mask[valid], pred_masks_i[fg_mask_i][valid], proto_i, xyxy_pix[valid], marea_i[fg_mask_i][valid]
+                    )
 
             # WARNING: lines below prevents Multi-GPU DDP 'unused gradient' PyTorch errors, do not remove
             else:
