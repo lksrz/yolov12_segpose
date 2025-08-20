@@ -659,7 +659,10 @@ class SegPoseLoss(v8DetectionLoss):
         loss[4] = self.bce(pred_scores, target_scores.to(dtype)).sum() / target_scores_sum
 
         if fg_mask.sum():
-            # bbox + dfl
+            # Preserve pixel-space GT boxes for segmentation loss
+            target_bboxes_pixels = target_bboxes.clone()
+
+            # bbox + dfl use stride-normalized boxes
             target_bboxes /= stride_tensor
             loss[0], loss[5] = self.bbox_loss(
                 pred_distri, pred_bboxes, anchor_points, target_bboxes, target_scores, target_scores_sum, fg_mask
@@ -670,12 +673,12 @@ class SegPoseLoss(v8DetectionLoss):
             if tuple(masks.shape[-2:]) != (mask_h, mask_w):
                 masks = F.interpolate(masks[None], (mask_h, mask_w), mode="nearest")[0]
             
-            # Reuse segmentation loss routine
+            # Reuse segmentation loss routine (expects pixel-space boxes)
             loss[1] = self.seg_helper.calculate_segmentation_loss(
                 fg_mask,
                 masks,
                 target_gt_idx,
-                target_bboxes,
+                target_bboxes_pixels,
                 batch_idx,
                 proto,
                 pred_masks,

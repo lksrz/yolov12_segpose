@@ -81,14 +81,17 @@ class SegmentationValidator(DetectionValidator):
             nc=self.nc,
         )
         
-        # Handle both regular segment and segmentpose models
+        # Handle both regular segment and segmentpose models, and cache dims for slicing later
+        self._nm = None
+        self._kpt_dim_total = None
         if isinstance(preds[1], (tuple, list)) and len(preds[1]) >= 3:
-            # Check if this might be a SegmentPose model (has 4 elements: det[1], mc, p, kpt_raw)
+            # SegmentPose: (det_train, mc, proto, kpt_raw)
             if len(preds[1]) == 4:
-                proto = preds[1][2]  # Proto is at index 2 for SegmentPose
-                pass  # SegmentPose model detected
-            else:
-                proto = preds[1][-1]  # Regular segment model
+                _, mc_train, proto, kpt_raw = preds[1]
+                self._nm = mc_train.shape[1]
+                self._kpt_dim_total = kpt_raw.shape[1]
+            else:  # Regular segment: (det_train, mc, proto)
+                proto = preds[1][-1]
         else:
             proto = preds[1]  # Exported format
         return p, proto
@@ -104,14 +107,11 @@ class SegmentationValidator(DetectionValidator):
         """Prepares a batch for training or inference by processing images and targets."""
         predn = super()._prepare_pred(pred, pbatch)
         
-        # Handle SegmentPose models which have keypoints at the end
-        # Structure: [box(4) + conf(1) + cls(1) + mask_coeffs(nm) + keypoints(nk*3)]
-        if hasattr(pbatch, 'get') and 'kpts' in pbatch:
-            # This is likely a SegmentPose model - extract mask coeffs excluding keypoints
-            # Assume keypoints are 8*3=24 dimensions for this dataset
-            kpt_dims = 24  # This might need to be dynamic
-            mask_coeffs = pred[:, 6:-kpt_dims] if pred.shape[1] > 6 + kpt_dims else pred[:, 6:]
-            pass  # SegmentPose fallback mode
+        # Handle SegmentPose models which have keypoints appended to prediction vector
+        # Use cached dims from postprocess if available
+        if getattr(self, "_nm", None):
+            end = 6 + int(self._nm)
+            mask_coeffs = pred[:, 6:end] if pred.shape[1] >= end else pred[:, 6:]
         else:
             # Regular segment model - all dims after class are mask coeffs
             mask_coeffs = pred[:, 6:]
