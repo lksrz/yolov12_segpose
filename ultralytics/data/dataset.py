@@ -286,15 +286,26 @@ class YOLODataset(BaseDataset):
                             # Fallback: empty tensor if conversion fails
                             t = torch.zeros(0)
                         safe_list.append(t)
-                try:
-                    value = torch.cat(safe_list, 0)
-                except Exception:
-                    # As a last resort, align dimensions for 'cls' to (n,1)
+                # Align empty tensors to reference shape to avoid 3D vs 1D mismatches
+                ref = next((x for x in safe_list if isinstance(x, torch.Tensor) and x.numel() > 0), None)
+                if ref is not None:
+                    aligned = []
+                    for x in safe_list:
+                        if x.numel() == 0:
+                            # build an empty tensor with same dims as ref (0, ...)
+                            empty_shape = (0, *tuple(ref.shape[1:])) if ref.ndim >= 1 else (0,)
+                            x = torch.zeros(empty_shape, dtype=ref.dtype)
+                        elif k == "cls" and x.ndim == 1:
+                            x = x.view(-1, 1)
+                        aligned.append(x)
+                    safe_list = aligned
+                else:
+                    # If all are empty, standardize to (0,1) for cls, else (0,)
                     if k == "cls":
-                        safe_list = [x.view(-1, 1) if x.ndim == 1 else x for x in safe_list]
-                        value = torch.cat(safe_list, 0)
+                        safe_list = [torch.zeros((0, 1), dtype=torch.float32) for _ in safe_list]
                     else:
-                        value = torch.cat(safe_list, 0)
+                        safe_list = [torch.zeros((0,), dtype=torch.float32) for _ in safe_list]
+                value = torch.cat(safe_list, 0)
             elif k == "segments":
                 # Keep raw segments as-is (list) to avoid dim mismatches; not used by training losses
                 new_batch[k] = list(value)
