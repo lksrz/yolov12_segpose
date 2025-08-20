@@ -125,15 +125,15 @@ def verify_image_label(args):
                     parsed = []
                     segs = []
                     for r in rows:
-                        assert len(r) >= base_cols, f"labels require {base_cols} columns each"
+                        # Strict filter: require complete head and non-empty polygon tail
+                        if len(r) < base_cols:
+                            continue  # drop instance
                         head = np.array(r[:base_cols], dtype=np.float32)
-                        parsed.append(head)
                         extra = r[base_cols:]
-                        if extra:
-                            assert len(extra) % 2 == 0, "segmentation polygon must be x y pairs"
-                            segs.append(np.array(extra, dtype=np.float32).reshape(-1, 2))
-                        else:
-                            segs.append(np.zeros((0, 2), dtype=np.float32))
+                        if len(extra) < 6 or len(extra) % 2 != 0:  # need at least 3 points (6 numbers)
+                            continue  # drop instance
+                        parsed.append(head)
+                        segs.append(np.array(extra, dtype=np.float32).reshape(-1, 2))
                     lb = np.stack(parsed, axis=0) if parsed else np.zeros((0, base_cols), dtype=np.float32)
                     segments = segs
                 else:

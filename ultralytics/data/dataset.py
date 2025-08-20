@@ -274,10 +274,13 @@ class YOLODataset(BaseDataset):
     def collate_fn(batch):
         """Collates data samples into batches."""
         new_batch = {}
-        keys = batch[0].keys()
-        values = list(zip(*[list(b.values()) for b in batch]))
-        for i, k in enumerate(keys):
-            value = values[i]
+        # Preserve key order from first sample, but gather values by key name to avoid misalignment
+        keys = list(batch[0].keys())
+        for k in keys:
+            value = [b[k] for b in batch]
+            # Skip helper keys that should not be batched
+            if k in {"seg_keep_idx"}:
+                continue
             if k == "img":
                 value = torch.stack(value, 0)
             if k in {"masks", "keypoints", "bboxes", "cls", "obb"}:
