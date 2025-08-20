@@ -272,7 +272,7 @@ class YOLODataset(BaseDataset):
             value = values[i]
             if k == "img":
                 value = torch.stack(value, 0)
-            if k in {"masks", "keypoints", "bboxes", "cls", "segments", "obb"}:
+            if k in {"masks", "keypoints", "bboxes", "cls", "obb"}:
                 # Ensure all elements are torch tensors before concatenation
                 safe_list = []
                 for v in value:
@@ -295,6 +295,10 @@ class YOLODataset(BaseDataset):
                         value = torch.cat(safe_list, 0)
                     else:
                         value = torch.cat(safe_list, 0)
+            elif k == "segments":
+                # Keep raw segments as-is (list) to avoid dim mismatches; not used by training losses
+                new_batch[k] = list(value)
+                continue
             new_batch[k] = value
         new_batch["batch_idx"] = list(new_batch["batch_idx"])
         for i in range(len(new_batch["batch_idx"])):
