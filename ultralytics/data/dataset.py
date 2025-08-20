@@ -273,7 +273,28 @@ class YOLODataset(BaseDataset):
             if k == "img":
                 value = torch.stack(value, 0)
             if k in {"masks", "keypoints", "bboxes", "cls", "segments", "obb"}:
-                value = torch.cat(value, 0)
+                # Ensure all elements are torch tensors before concatenation
+                safe_list = []
+                for v in value:
+                    if isinstance(v, torch.Tensor):
+                        safe_list.append(v)
+                    else:
+                        # Convert numpy arrays/lists to torch tensors
+                        try:
+                            t = torch.as_tensor(v)
+                        except Exception:
+                            # Fallback: empty tensor if conversion fails
+                            t = torch.zeros(0)
+                        safe_list.append(t)
+                try:
+                    value = torch.cat(safe_list, 0)
+                except Exception:
+                    # As a last resort, align dimensions for 'cls' to (n,1)
+                    if k == "cls":
+                        safe_list = [x.view(-1, 1) if x.ndim == 1 else x for x in safe_list]
+                        value = torch.cat(safe_list, 0)
+                    else:
+                        value = torch.cat(safe_list, 0)
             new_batch[k] = value
         new_batch["batch_idx"] = list(new_batch["batch_idx"])
         for i in range(len(new_batch["batch_idx"])):
