@@ -211,7 +211,6 @@ class YOLODataset(BaseDataset):
             cls is not with bboxes now, classification and semantic segmentation need an independent cls label
             Can also support classification and semantic segmentation by adding or removing dict keys there.
         """
-        cls = label.pop("cls", None)
         bboxes = label.pop("bboxes")
         segments = label.pop("segments", [])
         keypoints = label.pop("keypoints", None)
@@ -221,128 +220,28 @@ class YOLODataset(BaseDataset):
         # NOTE: do NOT resample oriented boxes
         segment_resamples = 100 if self.use_obb else 1000
         if len(segments) > 0:
-            # Option A (default now): skip segmentation training for instances without polygons
-            # Filter out empty polygons instead of fabricating rectangles
-            filtered_bboxes = []
-            filtered_segments = []
-            filtered_keypoints = [] if keypoints is not None else None
-            filtered_cls = [] if cls is not None else None
-            keep_indices = []
-            for i, s in enumerate(segments):
-                if s is not None and len(s) >= 3:
-                    keep_indices.append(i)
-                    filtered_bboxes.append(bboxes[i])
-                    filtered_segments.append(s)
-                    if keypoints is not None:
-                        filtered_keypoints.append(keypoints[i])
-                    if cls is not None:
-                        filtered_cls.append(cls[i])
-
-            bboxes = np.array(filtered_bboxes, dtype=np.float32) if filtered_bboxes else np.zeros((0, 4), dtype=np.float32)
-            segments = filtered_segments
-            if keypoints is not None:
-                if filtered_keypoints:
-                    keypoints = np.array(filtered_keypoints, dtype=np.float32)
-                else:
-                    # Preserve last-known nk, nd if possible
-                    if isinstance(keypoints, np.ndarray) and keypoints.ndim == 3:
-                        nk, nd = keypoints.shape[1], keypoints.shape[2]
-                    else:
-                        nk, nd = 0, 3
-                    keypoints = np.zeros((0, nk, nd), dtype=np.float32)
-            # record kept indices so downstream can align 'cls'
-            label["seg_keep_idx"] = np.array(keep_indices, dtype=np.int64)
-            # align cls to filtered instances
-            if cls is not None:
-                cls = np.array(filtered_cls, dtype=np.float32).reshape(-1, 1) if filtered_cls else np.zeros((0, 1), dtype=np.float32)
-
-            # Resample remaining polygons uniformly
-            if len(segments) > 0:
-                max_len = max(len(s) for s in segments)
-                segment_resamples = (max_len + 1) if segment_resamples < max_len else segment_resamples
-                segments = np.stack(resample_segments(segments, n=segment_resamples), axis=0)
-            else:
-                segments = np.zeros((0, segment_resamples, 2), dtype=np.float32)
+            # make sure segments interpolate correctly if original length is greater than segment_resamples
+            max_len = max(len(s) for s in segments)
+            segment_resamples = (max_len + 1) if segment_resamples < max_len else segment_resamples
+            # list[np.array(segment_resamples, 2)] * num_samples
+            segments = np.stack(resample_segments(segments, n=segment_resamples), axis=0)
         else:
             segments = np.zeros((0, segment_resamples, 2), dtype=np.float32)
         label["instances"] = Instances(bboxes, segments, keypoints, bbox_format=bbox_format, normalized=normalized)
-        if cls is not None:
-            label["cls"] = cls
         return label
 
     @staticmethod
     def collate_fn(batch):
         """Collates data samples into batches."""
         new_batch = {}
-        # Preserve key order from first sample, but gather values by key name to avoid misalignment
-        keys = list(batch[0].keys())
-        for k in keys:
-            value = [b[k] for b in batch]
-            # Skip helper keys that should not be batched
-            if k in {"seg_keep_idx"}:
-                continue
+        keys = batch[0].keys()
+        values = list(zip(*[list(b.values()) for b in batch]))
+        for i, k in enumerate(keys):
+            value = values[i]
             if k == "img":
                 value = torch.stack(value, 0)
-            if k in {"masks", "keypoints", "bboxes", "cls", "obb"}:
-                # Ensure all elements are torch tensors before concatenation
-                safe_list = []
-                for v in value:
-                    if isinstance(v, torch.Tensor):
-                        t = v
-                    else:
-                        # Convert numpy arrays/lists to torch tensors
-                        try:
-                            t = torch.as_tensor(v)
-                        except Exception:
-                            # Fallback: empty tensor if conversion fails
-                            t = torch.zeros(0)
-                    # Per-key shape normalization before alignment
-                    if k == "masks":
-                        if t.ndim == 2:  # (H, W) -> (1, H, W)
-                            t = t.unsqueeze(0)
-                        elif t.ndim == 1 and t.numel() == 0:
-                            # will be aligned later
-                            pass
-                    elif k == "bboxes":
-                        if t.ndim == 1 and (t.numel() % 4 == 0):
-                            t = t.view(-1, 4)
-                    elif k == "obb":
-                        if t.ndim == 1 and (t.numel() % 5 == 0):
-                            t = t.view(-1, 5)
-                    elif k == "cls":
-                        if t.ndim == 1:
-                            t = t.view(-1, 1)
-                    elif k == "keypoints":
-                        # leave to ref alignment if empty; common cases are (n, k, d)
-                        if t.ndim == 2 and t.shape[0] == 0:
-                            pass
-                    safe_list.append(t)
-                # Align empty tensors to reference shape to avoid 3D vs 1D mismatches
-                ref = next((x for x in safe_list if isinstance(x, torch.Tensor) and x.numel() > 0), None)
-                if ref is not None:
-                    aligned = []
-                    for x in safe_list:
-                        if x.numel() == 0:
-                            # build an empty tensor with same dims as ref (0, ...)
-                            empty_shape = (0, *tuple(ref.shape[1:])) if ref.ndim >= 1 else (0,)
-                            x = torch.zeros(empty_shape, dtype=ref.dtype)
-                        elif k == "cls" and x.ndim == 1:
-                            x = x.view(-1, 1)
-                        elif k == "masks" and x.ndim == 2 and ref.ndim == 3:
-                            x = x.unsqueeze(0)
-                        aligned.append(x)
-                    safe_list = aligned
-                else:
-                    # If all are empty, standardize to (0,1) for cls, else (0,)
-                    if k == "cls":
-                        safe_list = [torch.zeros((0, 1), dtype=torch.float32) for _ in safe_list]
-                    else:
-                        safe_list = [torch.zeros((0,), dtype=torch.float32) for _ in safe_list]
-                value = torch.cat(safe_list, 0)
-            elif k == "segments":
-                # Keep raw segments as-is (list) to avoid dim mismatches; not used by training losses
-                new_batch[k] = list(value)
-                continue
+            if k in {"masks", "keypoints", "bboxes", "cls", "segments", "obb"}:
+                value = torch.cat(value, 0)
             new_batch[k] = value
         new_batch["batch_idx"] = list(new_batch["batch_idx"])
         for i in range(len(new_batch["batch_idx"])):
