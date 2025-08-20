@@ -290,14 +290,14 @@ class Model(nn.Module, PyTorchModelHubMixin, repo_url="https://github.com/ultral
         if Path(weights).suffix == ".pt":
             self.model, self.ckpt = attempt_load_one_weight(weights)
             self.task = self.model.args["task"]
-            print(f"MODEL LOADING DEBUG: Loading {weights}, task={self.task}")
+            # Debug print removed for cleaner logs
             
             # Special handling for SegmentPose models - ensure correct task and validator
             if hasattr(self.model, 'model') and hasattr(self.model.model, '__getitem__'):
                 try:
                     last_layer = self.model.model[-1]
                     if hasattr(last_layer, '__class__') and 'SegmentPose' in str(last_layer.__class__):
-                        print(f"ENGINE: Detected SegmentPose model, forcing task from '{self.task}' to 'segment_pose'")
+                        # Debug print removed for cleaner logs
                         self.task = "segment_pose"
                         self.model.args["task"] = "segment_pose"
                 except (IndexError, AttributeError):
@@ -624,7 +624,7 @@ class Model(nn.Module, PyTorchModelHubMixin, repo_url="https://github.com/ultral
         validator=None,
         **kwargs: Any,
     ):
-        print(f"VAL METHOD DEBUG: task={self.task}, validator={type(validator).__name__ if validator else None}")
+        # Debug print removed for cleaner logs
         """
         Validates the model using a specified dataset and validation configuration.
 
@@ -652,13 +652,13 @@ class Model(nn.Module, PyTorchModelHubMixin, repo_url="https://github.com/ultral
         args = {**self.overrides, **custom, **kwargs, "mode": "val"}  # highest priority args on the right
 
         smart_validator = self._smart_load("validator")
-        print(f"VAL DEBUG: Smart validator loaded: {smart_validator.__name__ if smart_validator else None}")
+        # Debug print removed for cleaner logs
         
         final_validator_class = validator or smart_validator
-        print(f"VAL DEBUG: Using validator class: {final_validator_class.__name__ if final_validator_class else None}")
+        # Debug print removed for cleaner logs
         
         validator = final_validator_class(args=args, _callbacks=self.callbacks)
-        print(f"VAL DEBUG: Validator instance created: {type(validator).__name__}")
+        # Debug print removed for cleaner logs
         
         validator(model=self.model)
         self.metrics = validator.metrics
@@ -1115,14 +1115,13 @@ class Model(nn.Module, PyTorchModelHubMixin, repo_url="https://github.com/ultral
             - This method is typically used internally by other methods of the Model class.
             - The task_map attribute should be properly initialized with the correct mappings for each task.
         """
-        print(f"SMART_LOAD DEBUG: Loading {key} for task '{self.task}'")
-        print(f"SMART_LOAD DEBUG: Available tasks in task_map: {list(self.task_map.keys()) if hasattr(self, 'task_map') else 'No task_map'}")
+        # Debug prints removed for cleaner logs
         try:
             result = self.task_map[self.task][key]
-            print(f"SMART_LOAD DEBUG: Successfully loaded {result.__name__} for {key}")
+            # Debug print removed for cleaner logs
             return result
         except Exception as e:
-            print(f"SMART_LOAD DEBUG: Failed to load {key} for task '{self.task}': {e}")
+            # Debug print removed for cleaner logs
             name = self.__class__.__name__
             mode = inspect.stack()[1][3]  # get the function name.
             raise NotImplementedError(

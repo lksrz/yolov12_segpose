@@ -35,7 +35,6 @@ class SegmentationValidator(DetectionValidator):
         self.process = None
         self.args.task = "segment"
         self.metrics = SegmentMetrics(save_dir=self.save_dir, on_plot=self.on_plot)
-        print("VALIDATOR: SegmentationValidator initialized - THIS IS THE WRONG VALIDATOR FOR SEGPOSE!")
 
     def preprocess(self, batch):
         """Preprocesses batch by converting masks to float and sending to device."""
