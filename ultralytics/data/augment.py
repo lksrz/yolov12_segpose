@@ -867,9 +867,21 @@ class Mosaic(BaseMixTransform):
         }
         final_labels["instances"].clip(imgsz, imgsz)
         good = final_labels["instances"].remove_zero_area_boxes()
-        # Guard: only index if dims agree; otherwise recompute per-source keep
-        if good.shape[0] == final_labels["cls"].shape[0]:
+        # Always enforce cls length to match instances length after filtering
+        try:
             final_labels["cls"] = final_labels["cls"][good]
+        except Exception:
+            # Fallback: trim or pad cls to match instances, then apply mask
+            n_inst = len(final_labels["instances"])
+            c = final_labels["cls"]
+            if c.shape[0] != n_inst:
+                if c.shape[0] > n_inst:
+                    c = c[:n_inst]
+                else:
+                    # pad with last or zeros
+                    pad = np.repeat(c[-1:], n_inst - c.shape[0], axis=0) if c.shape[0] else np.zeros((n_inst, 1), dtype=np.float32)
+                    c = np.concatenate([c, pad], axis=0)
+            final_labels["cls"] = c[good]
         if "texts" in mosaic_labels[0]:
             final_labels["texts"] = mosaic_labels[0]["texts"]
         return final_labels

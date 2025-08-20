@@ -211,6 +211,7 @@ class YOLODataset(BaseDataset):
             cls is not with bboxes now, classification and semantic segmentation need an independent cls label
             Can also support classification and semantic segmentation by adding or removing dict keys there.
         """
+        cls = label.pop("cls", None)
         bboxes = label.pop("bboxes")
         segments = label.pop("segments", [])
         keypoints = label.pop("keypoints", None)
@@ -225,6 +226,7 @@ class YOLODataset(BaseDataset):
             filtered_bboxes = []
             filtered_segments = []
             filtered_keypoints = [] if keypoints is not None else None
+            filtered_cls = [] if cls is not None else None
             keep_indices = []
             for i, s in enumerate(segments):
                 if s is not None and len(s) >= 3:
@@ -233,6 +235,8 @@ class YOLODataset(BaseDataset):
                     filtered_segments.append(s)
                     if keypoints is not None:
                         filtered_keypoints.append(keypoints[i])
+                    if cls is not None:
+                        filtered_cls.append(cls[i])
 
             bboxes = np.array(filtered_bboxes, dtype=np.float32) if filtered_bboxes else np.zeros((0, 4), dtype=np.float32)
             segments = filtered_segments
@@ -240,6 +244,9 @@ class YOLODataset(BaseDataset):
                 keypoints = np.array(filtered_keypoints, dtype=np.float32) if filtered_keypoints else np.zeros((0, *keypoints.shape[1:]), dtype=np.float32)
             # record kept indices so downstream can align 'cls'
             label["seg_keep_idx"] = np.array(keep_indices, dtype=np.int64)
+            # align cls to filtered instances
+            if cls is not None:
+                cls = np.array(filtered_cls, dtype=np.float32).reshape(-1, 1) if filtered_cls else np.zeros((0, 1), dtype=np.float32)
 
             # Resample remaining polygons uniformly
             if len(segments) > 0:
@@ -251,6 +258,8 @@ class YOLODataset(BaseDataset):
         else:
             segments = np.zeros((0, segment_resamples, 2), dtype=np.float32)
         label["instances"] = Instances(bboxes, segments, keypoints, bbox_format=bbox_format, normalized=normalized)
+        if cls is not None:
+            label["cls"] = cls
         return label
 
     @staticmethod
