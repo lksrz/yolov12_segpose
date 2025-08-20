@@ -845,7 +845,16 @@ class Mosaic(BaseMixTransform):
         instances = []
         imgsz = self.imgsz * 2  # mosaic imgsz
         for labels in mosaic_labels:
-            cls.append(labels["cls"])
+            # If dataset step filtered seg-only instances, align cls with kept indices
+            kept = labels.get("seg_keep_idx", None)
+            if kept is not None and len(labels["cls"]) == kept.shape[0]:
+                # Already aligned (cls was reduced with seg), just append
+                cls.append(labels["cls"])
+            elif kept is not None and kept.size > 0:
+                # Align: select classes for instances that remain after seg filtering
+                cls.append(labels["cls"][kept])
+            else:
+                cls.append(labels["cls"])
             instances.append(labels["instances"])
         # Final labels
         final_labels = {
@@ -858,7 +867,9 @@ class Mosaic(BaseMixTransform):
         }
         final_labels["instances"].clip(imgsz, imgsz)
         good = final_labels["instances"].remove_zero_area_boxes()
-        final_labels["cls"] = final_labels["cls"][good]
+        # Guard: only index if dims agree; otherwise recompute per-source keep
+        if good.shape[0] == final_labels["cls"].shape[0]:
+            final_labels["cls"] = final_labels["cls"][good]
         if "texts" in mosaic_labels[0]:
             final_labels["texts"] = mosaic_labels[0]["texts"]
         return final_labels

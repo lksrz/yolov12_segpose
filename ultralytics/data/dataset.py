@@ -238,6 +238,8 @@ class YOLODataset(BaseDataset):
             segments = filtered_segments
             if keypoints is not None:
                 keypoints = np.array(filtered_keypoints, dtype=np.float32) if filtered_keypoints else np.zeros((0, *keypoints.shape[1:]), dtype=np.float32)
+            # record kept indices so downstream can align 'cls'
+            label["seg_keep_idx"] = np.array(keep_indices, dtype=np.int64)
 
             # Resample remaining polygons uniformly
             if len(segments) > 0:
