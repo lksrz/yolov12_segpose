@@ -262,10 +262,100 @@ class SegmentPoseValidator(DetectionValidator):
 
 
     def plot_predictions(self, batch, preds, ni):
-        """Plot predicted detections only (boxes/conf/class) for segment_pose to avoid tuple handling issues."""
+        """Plot predicted boxes, masks and keypoints for segment_pose validation."""
+        # preds is (predictions_list, proto_tensor)
+        predictions, proto_tensor = preds[0], preds[1]
+
+        # Accumulate per-image outputs to feed into plot_images()
+        batch_indices_list = []
+        classes_list = []
+        xywh_list = []
+        confs_list = []
+        masks_list = []
+        kpts_list = []
+
+        for si, pred in enumerate(predictions):
+            # Select corresponding proto
+            if proto_tensor is not None:
+                if proto_tensor.dim() == 4 and si < proto_tensor.shape[0]:
+                    proto = proto_tensor[si]
+                elif proto_tensor.dim() == 3:
+                    proto = proto_tensor
+                else:
+                    proto = None
+            else:
+                proto = None
+
+            # Prepare batch and predictions at original scale
+            pbatch = self._prepare_batch(si, batch)
+            if len(pred) == 0:
+                continue
+            predn, pred_masks, pred_kpts = self._prepare_pred(pred, pbatch, proto)
+
+            # Build normalized xywh for plot_images
+            xywh = ops.xyxy2xywh(predn[:, :4].clone())
+            # normalize by image size used in plot mosaic (pbatch['imgsz'])
+            img_h, img_w = pbatch["imgsz"]
+            norm = torch.tensor([img_w, img_h, img_w, img_h], device=predn.device)
+            xywh[:, :4] /= norm
+
+            # Append
+            num = predn.shape[0]
+            batch_indices_list.append(torch.full((num,), si, device=predn.device))
+            classes_list.append(predn[:, 5])
+            xywh_list.append(xywh)
+            confs_list.append(predn[:, 4])
+
+            # Masks (convert to uint8 for plotting utils)
+            if pred_masks is not None:
+                # pred_masks already at pbatch['imgsz'] size
+                masks_list.append(pred_masks.to(torch.uint8))
+
+            # Keypoints
+            if pred_kpts is not None and pred_kpts.numel() > 0:
+                kpts_list.append(pred_kpts)
+
+        if len(classes_list):
+            batch_idx = torch.cat(batch_indices_list, 0)
+            cls = torch.cat(classes_list, 0)
+            bboxes = torch.cat(xywh_list, 0)
+            confs = torch.cat(confs_list, 0)
+        else:
+            # Fallback to empty predictions format
+            batch_idx, cls, bboxes, confs = (
+                torch.zeros(0, dtype=torch.int64),
+                torch.zeros(0),
+                torch.zeros(0, 4),
+                torch.zeros(0),
+            )
+
+        # Stack masks to (N, H, W) if available
+        if len(masks_list):
+            try:
+                masks = torch.cat(masks_list, 0)
+            except Exception:
+                masks = torch.zeros(0, dtype=torch.uint8)
+        else:
+            masks = torch.zeros(0, dtype=torch.uint8)
+
+        # Stack keypoints to (N, K, D) if available
+        if len(kpts_list):
+            try:
+                kpts = torch.cat(kpts_list, 0)
+            except Exception:
+                kpts = torch.zeros(0, getattr(self, "kpt_shape", [0, 3])[0], getattr(self, "kpt_shape", [0, 3])[1])
+        else:
+            kpts = torch.zeros(0, getattr(self, "kpt_shape", [0, 3])[0], getattr(self, "kpt_shape", [0, 3])[1])
+
+        # Plot with masks and keypoints
         plot_images(
             batch["img"],
-            *output_to_target(preds[0], max_det=self.args.max_det),
+            batch_idx,
+            cls,
+            bboxes,
+            confs=confs,
+            masks=masks,
+            kpts=kpts,
             paths=batch["im_file"],
             fname=self.save_dir / f"val_batch{ni}_pred.jpg",
             names=self.names,

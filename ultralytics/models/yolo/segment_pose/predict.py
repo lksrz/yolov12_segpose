@@ -41,7 +41,30 @@ class SegmentPosePredictor(DetectionPredictor):
                 continue
 
             # Use YOLOv12-seg approach: slice mask coeffs as everything between boxes and keypoints
-            nk, nd = self.model.kpt_shape
+            # Robustly resolve keypoint shape even when model is wrapped (e.g., AutoBackend)
+            if hasattr(self.model, "kpt_shape"):
+                nk, nd = self.model.kpt_shape
+            elif hasattr(self.model, "model") and hasattr(self.model.model, "kpt_shape"):
+                nk, nd = self.model.model.kpt_shape
+            elif hasattr(self.model, "yaml") and isinstance(self.model.yaml, dict) and "kpt_shape" in self.model.yaml:
+                nk, nd = self.model.yaml["kpt_shape"]
+            else:
+                # Fallback: attempt to read from checkpoint metadata if available
+                try:
+                    import torch
+
+                    pt_path = getattr(self.model, "pt_path", None)
+                    if pt_path is not None:
+                        ckpt = torch.load(pt_path, map_location="cpu")
+                        model_in_ckpt = ckpt.get("model", None)
+                        if hasattr(model_in_ckpt, "yaml") and isinstance(model_in_ckpt.yaml, dict):
+                            nk, nd = model_in_ckpt.yaml.get("kpt_shape", [8, 3])
+                        else:
+                            nk, nd = 8, 3
+                    else:
+                        nk, nd = 8, 3
+                except Exception:
+                    nk, nd = 8, 3  # final default
             kpt_dims = nk * nd
             # Structure: [box(4) + conf(1) + cls(1) + mask_coeffs(nm) + keypoints(kpt_dims)]
             mask_start = 6
