@@ -345,7 +345,8 @@ class v8SegmentationLoss(v8DetectionLoss):
             loss[1] += (proto * 0).sum() + (pred_masks * 0).sum()  # inf sums may lead to nan loss
 
         loss[0] *= self.hyp.box  # box gain
-        loss[1] *= self.hyp.box  # seg gain
+        seg_gain = getattr(self.hyp, "seg", None) or self.hyp.box
+        loss[1] *= seg_gain / batch_size  # seg gain (tunable, defaults to box)
         loss[2] *= self.hyp.cls  # cls gain
         loss[3] *= self.hyp.dfl  # dfl gain
 
@@ -452,7 +453,8 @@ class v8SegmentationLoss(v8DetectionLoss):
             else:
                 loss += (proto * 0).sum() + (pred_masks * 0).sum()  # inf sums may lead to nan loss
 
-        return loss / fg_mask.sum()
+        # Return unnormalized sum; callers will normalize by batch_size like the original implementation
+        return loss
 
 
 class v8PoseLoss(v8DetectionLoss):
@@ -527,8 +529,8 @@ class v8PoseLoss(v8DetectionLoss):
             )
 
         loss[0] *= self.hyp.box  # box gain
-        loss[1] *= self.hyp.pose  # pose gain
-        loss[2] *= self.hyp.kobj  # kobj gain
+        loss[1] *= self.hyp.pose / batch_size  # pose gain (match original)
+        loss[2] *= self.hyp.kobj / batch_size  # kobj gain (match original)
         loss[3] *= self.hyp.cls  # cls gain
         loss[4] *= self.hyp.dfl  # dfl gain
 
@@ -720,9 +722,10 @@ class SegPoseLoss(v8DetectionLoss):
 
         # gains
         loss[0] *= self.hyp.box
-        loss[1] *= self.hyp.box  # seg gain aligns with v8SegmentationLoss
-        loss[2] *= self.hyp.pose
-        loss[3] *= self.hyp.kobj
+        seg_gain = getattr(self.hyp, "seg", None) or self.hyp.box
+        loss[1] *= seg_gain / batch_size  # seg gain (tunable, defaults to box)
+        loss[2] *= self.hyp.pose / batch_size
+        loss[3] *= self.hyp.kobj / batch_size
         loss[4] *= self.hyp.cls
         loss[5] *= self.hyp.dfl
 
