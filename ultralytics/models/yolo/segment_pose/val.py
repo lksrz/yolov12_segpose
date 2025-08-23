@@ -292,11 +292,11 @@ class SegmentPoseValidator(DetectionValidator):
                 continue
             predn, pred_masks, pred_kpts = self._prepare_pred(pred, pbatch, proto)
 
-            # Build normalized xywh for plot_images
-            xywh = ops.xyxy2xywh(predn[:, :4].clone())
+            # Build normalized xywh for plot_images from input/model-space boxes
+            xywh = ops.xyxy2xywh(pred[:, :4].clone())
             # normalize by image size used in plot mosaic (pbatch['imgsz'])
             img_h, img_w = pbatch["imgsz"]
-            norm = torch.tensor([img_w, img_h, img_w, img_h], device=predn.device)
+            norm = torch.tensor([img_w, img_h, img_w, img_h], device=pred.device)
             xywh[:, :4] /= norm
 
             # Append
@@ -311,9 +311,12 @@ class SegmentPoseValidator(DetectionValidator):
                 # pred_masks already at pbatch['imgsz'] size
                 masks_list.append(pred_masks.to(torch.uint8))
 
-            # Keypoints
+            # Keypoints: convert back to input/model space for plotting on batch["img"]
             if pred_kpts is not None and pred_kpts.numel() > 0:
-                kpts_list.append(pred_kpts)
+                kpts_imgsz = pred_kpts.clone()
+                # Scale from original image space back to input image size used for plotting
+                ops.scale_coords(pbatch["ori_shape"], kpts_imgsz, pbatch["imgsz"], ratio_pad=pbatch["ratio_pad"])
+                kpts_list.append(kpts_imgsz)
 
         if len(classes_list):
             batch_idx = torch.cat(batch_indices_list, 0)
@@ -358,6 +361,21 @@ class SegmentPoseValidator(DetectionValidator):
             kpts=kpts,
             paths=batch["im_file"],
             fname=self.save_dir / f"val_batch{ni}_pred.jpg",
+            names=self.names,
+            on_plot=self.on_plot,
+        )
+
+    def plot_val_samples(self, batch, ni):
+        """Plots validation samples with boxes, masks and keypoints for combined task."""
+        plot_images(
+            batch["img"],
+            batch["batch_idx"],
+            batch["cls"].squeeze(-1),
+            batch["bboxes"],
+            masks=batch.get("masks"),
+            kpts=batch.get("keypoints"),
+            paths=batch["im_file"],
+            fname=self.save_dir / f"val_batch{ni}_labels.jpg",
             names=self.names,
             on_plot=self.on_plot,
         )
