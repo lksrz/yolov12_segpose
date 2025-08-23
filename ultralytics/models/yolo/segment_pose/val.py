@@ -311,12 +311,20 @@ class SegmentPoseValidator(DetectionValidator):
                 # pred_masks already at pbatch['imgsz'] size
                 masks_list.append(pred_masks.to(torch.uint8))
 
-            # Keypoints: convert back to input/model space for plotting on batch["img"]
-            if pred_kpts is not None and pred_kpts.numel() > 0:
-                kpts_imgsz = pred_kpts.clone()
-                # Scale from original image space back to input image size used for plotting
-                ops.scale_coords(pbatch["ori_shape"], kpts_imgsz, pbatch["imgsz"], ratio_pad=pbatch["ratio_pad"])
-                kpts_list.append(kpts_imgsz)
+            # Keypoints: take directly from input/model-space tail to align with batch["img"]
+            try:
+                nk, nd = (self.kpt_shape if isinstance(self.kpt_shape, (list, tuple)) else (pred_kpts.shape[1], 3))
+                kpt_dims = nk * nd
+                if pred.shape[1] >= 6 + kpt_dims:
+                    kpts_input = pred[:, -kpt_dims:].view(num, nk, nd)
+                    kpts_list.append(kpts_input)
+                elif pred_kpts is not None and pred_kpts.numel() > 0:
+                    # Fallback: use already scaled keypoints and map back to input size
+                    kpts_imgsz = pred_kpts.clone()
+                    ops.scale_coords(pbatch["ori_shape"], kpts_imgsz, pbatch["imgsz"], ratio_pad=pbatch["ratio_pad"])
+                    kpts_list.append(kpts_imgsz)
+            except Exception:
+                pass
 
         if len(classes_list):
             batch_idx = torch.cat(batch_indices_list, 0)
@@ -363,6 +371,7 @@ class SegmentPoseValidator(DetectionValidator):
             fname=self.save_dir / f"val_batch{ni}_pred.jpg",
             names=self.names,
             on_plot=self.on_plot,
+            conf_thres=0.05,
         )
 
     def plot_val_samples(self, batch, ni):
