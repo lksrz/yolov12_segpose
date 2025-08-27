@@ -289,7 +289,12 @@ class SegmentPose(Detect):
         self.nm = nm  # number of masks
         self.npr = npr  # number of protos
         self.proto = Proto(ch[0], self.npr, self.nm)
-        c4m = max(ch[0] // 4, self.nm)
+        # Slightly wider branch width than baseline to increase capacity (was //4, now //3)
+        c4m = max(ch[0] // 3, self.nm)
+        # Lightweight adapter to reduce cross-task interference (new)
+        self.adapt_m = nn.ModuleList(
+            nn.Sequential(Conv(x, x, 1), DWConv(x, x, 3), Conv(x, x, 1)) for x in ch
+        )
         self.cv4m = nn.ModuleList(
             nn.Sequential(Conv(x, c4m, 3), Conv(c4m, c4m, 3), nn.Conv2d(c4m, self.nm, 1)) for x in ch
         )
@@ -297,7 +302,12 @@ class SegmentPose(Detect):
         # Pose branch
         self.kpt_shape = kpt_shape  # (num_keypoints, dims)
         self.nk = kpt_shape[0] * kpt_shape[1]
-        c4k = max(ch[0] // 4, self.nk)
+        # Slightly wider branch width than baseline to increase capacity
+        c4k = max(ch[0] // 3, self.nk)
+        # Lightweight adapter to reduce cross-task interference
+        self.adapt_k = nn.ModuleList(
+            nn.Sequential(Conv(x, x, 1), DWConv(x, x, 3), Conv(x, x, 1)) for x in ch
+        )
         self.cv4k = nn.ModuleList(
             nn.Sequential(Conv(x, c4k, 3), Conv(c4k, c4k, 3), nn.Conv2d(c4k, self.nk, 1)) for x in ch
         )
@@ -307,10 +317,13 @@ class SegmentPose(Detect):
         # Proto and mask coefficients
         p = self.proto(x[0])  # (bs, npr, h, w)
         bs = p.shape[0]
-        mc = torch.cat([self.cv4m[i](x[i]).view(bs, self.nm, -1) for i in range(self.nl)], 2)
+        # Apply task-specific adapters without altering shared features used by Detect
+        seg_feats = [self.adapt_m[i](x[i]) for i in range(self.nl)]
+        mc = torch.cat([self.cv4m[i](seg_feats[i]).view(bs, self.nm, -1) for i in range(self.nl)], 2)
 
         # Keypoints raw (pre-decode)
-        kpt_raw = torch.cat([self.cv4k[i](x[i]).view(bs, self.nk, -1) for i in range(self.nl)], -1)
+        pose_feats = [self.adapt_k[i](x[i]) for i in range(self.nl)]
+        kpt_raw = torch.cat([self.cv4k[i](pose_feats[i]).view(bs, self.nk, -1) for i in range(self.nl)], -1)
 
         # Detect head
         det = Detect.forward(self, x)
